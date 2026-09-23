@@ -1,0 +1,203 @@
+字体许可与版权声明 / Font Licenses & Attributions
+========================================================================
+本文件收录 frontend 自托管（self-hosted）字体文件的授权信息。
+内容相同的副本另存一份在 frontend/public/font-licenses.txt，以便构建产物
+（dist/）在对外分发字体时同样随附许可证 —— 两处必须保持一致，改一处要同步另一处。
+
+最后更新：2026-09-21
+
+
+------------------------------------------------------------------------
+1. 字体清单与授权一览
+------------------------------------------------------------------------
+
+[1] Playfair Display (400 / 500)
+    文件：src/assets/fonts/playfair-400.woff2、playfair-500.woff2
+    来源：Google Fonts / github.com/clauseggers/Playfair-Display
+    授权：SIL Open Font License 1.1（全文见第 2 节）
+    版权：Copyright 2017 The Playfair Display Project Authors
+          (https://github.com/clauseggers/Playfair-Display),
+          with Reserved Font Name "Playfair Display"
+    用途：首页 hero 刊头大字（.cinema-title / .cinema-subname / .mag-name / .mag-sub）
+    说明：允许免费商用、嵌入、修改与再分发，且不要求在成品中署名。
+
+[2] 阿里巴巴普惠体 3.0（Alibaba PuHuiTi 3.0，字重 55 / 65 / 75 / 85）
+    文件：src/assets/fonts/puhuiti/puhuiti-3-{55,65,75,85}-{1..6}.woff2（共 24 片）
+    来源：阿里巴巴普惠体官网 webfont 服务（fonts.alibabadesign.com），
+          按 unicode-range 分片下载后本地自托管
+    授权：阿里巴巴「免费的普通许可」（法律声明全文见第 3 节）
+          —— 个人与企业均可用于商业用途或非商业用途，无需付费
+    版权：阿里巴巴（中国）有限公司
+    用途：全站正文与 UI 字体（见 src/styles/font-puhuiti.css）
+    说明：官方子集不含韩文音节（U+AC00–U+D7AF），韩文回退系统字体。
+
+[3] 思源宋体 Noto Serif SC（字重 400 / 500）
+    文件：public/fonts/noto-serif-sc/notoserifsc-{400,500}-{1..101}.woff2（共 202 片）
+    来源：Google Fonts（fonts.googleapis.com），按 unicode-range 分片下载后本地自托管；
+          上游仓库 github.com/notofonts/noto-cjk；抓取/更新脚本 scripts/fetch_noto_serif_sc.py
+    授权：SIL Open Font License 1.1（正文见第 2 节，与 Playfair 同一份许可文本；
+          版权声明见第 4 节）
+    用途：仅 hero 名字的**汉字字形**（src/styles/font-noto-serif-sc.css，
+          选择器 .hero-cover-name--han）——拉丁字形仍归 Playfair Display、
+          韩文仍走系统字体，两者刻意不使用本字体
+    说明：允许免费商用、嵌入、修改与再分发，且不要求在成品中署名。
+          按 unicode-range 分片，名字是拉丁/韩文时不会下载任何汉字分片。
+          ⚠ 字体文件必须留在 public/（不参与打包）：202 个资产进 vite 依赖图会拖死构建。
+
+
+------------------------------------------------------------------------
+2. Playfair Display — SIL Open Font License 1.1
+------------------------------------------------------------------------
+Copyright 2017 The Playfair Display Project Authors
+(https://github.com/clauseggers/Playfair-Display),
+with Reserved Font Name "Playfair Display"
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://openfontlicense.org
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+
+------------------------------------------------------------------------
+3. 阿里巴巴普惠体 3.0 — 官方法律声明（全文）
+------------------------------------------------------------------------
+来源：https://www.yuque.com/yiguang-wkqc2/puhuiti/nus9wiinq4aeiegy
+官网：https://www.alibabafonts.com
+
+《阿里巴巴普惠体 3.0 版》法律声明
+
+1. 阿里巴巴普惠体 3.0 版，在 2.0 版的基础上，新增拓展了符合国标 GB18030-2022
+   规格的简体中文字库（指定 7 款字重）。现有简体中文（指定 9 款字重）、越南文
+   和泰文字体（指定 3 款字重）、韩文字体（指定 3 款字重）、日文字体（指定 3 款
+   字重）、繁体中文（Big5 和 HK 分别指定 4 款字重），前述字体及包含该字体的字库
+   软件，合称「阿里巴巴字体」。
+
+2. 阿里巴巴字体的知识产权和相关权益归属于阿里巴巴（中国）有限公司（以下简称
+   「阿里巴巴」），受《中华人民共和国著作权法》及其他适用法律法规、国际公约、
+   条约的保护。
+
+3. 阿里巴巴授权个人、企业等用户在遵守本声明相关条款的前提下，可以下载、安装和
+   使用上述阿里巴巴字体，该授权是免费的普通许可，用户可基于合法目的用于商业用途
+   或非商业用途，但不得以任何违反法律法规、政策、规章或公序良俗的方式使用。
+
+4. 除本法律声明中明确授权之外，阿里巴巴未授予用户关于阿里巴巴字体的其他权利。
+   未经阿里巴巴书面授权，任何人不得：
+   1) 对阿里巴巴字体进行仿制、转换、翻译、反编译、反向工程、拆分、破解，或以其
+      他方式试图从该字库软件获取源代码；
+   2) 删除、覆盖或修改阿里巴巴字体法律声明的全部或部分内容；
+   3) 将阿里巴巴字体进行单独定价出售、出租、出借、转让、转授权，或采取其他未经
+      阿里巴巴明确授权的行为；
+   4) 发布任何使外界误认其与阿里巴巴或其关联公司存在合作、赞助或背书等商业关联
+      的不实信息。
+
+5. 阿里巴巴授予用户的上述授权不附带任何明示或暗示的保证，不对任何人因从非阿里
+   巴巴官方渠道或指定渠道下载、安装或使用阿里巴巴字体而引发的任何直接或间接损失
+   承担责任。
+
+6. 本声明的解释、履行与争议解决适用中华人民共和国的法律。用户与阿里巴巴就阿里
+   巴巴字体的使用若发生争议，双方应友好协商，若协商不成，任一方有权向浙江省杭州
+   市有管辖权的人民法院提起诉讼。
+
+—— 项目内的使用口径（非官方文本，仅记录本项目做法）——
+本项目的普惠体 woff2 系从阿里巴巴官方 webfont 服务按 unicode-range 分片获取后
+本地自托管，仅用于本项目站点自身的正文与 UI 渲染，不单独定价出售、出租、出借、
+转让或转授权该字体文件，亦未对字体做仿制/转换/拆分等修改，法律声明原文完整保留
+于本节。若后续需要更严格的合规姿态，可改为直接在页面引用官方 webfont 服务
+（fonts.alibabadesign.com），不再自托管字体文件。
+
+
+------------------------------------------------------------------------
+4. Noto Serif SC — SIL Open Font License 1.1（版权声明）
+------------------------------------------------------------------------
+版权：(c) 2017-2024 Adobe (http://www.adobe.com/).
+上游：https://www.github.com/notofonts/noto-cjk
+       （Google Fonts 收录名「Noto Serif SC」/ display name「Noto Serif Simplified Chinese」）
+
+许可条款与第 2 节完全相同（SIL Open Font License, Version 1.1），
+按 OFL 第 2 条要求，随附上述版权声明与第 2 节的许可正文。

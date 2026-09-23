@@ -1,0 +1,814 @@
+/* ===== 资料库工作台共享口径（组合 / 艺人工作台共用） =====
+   通过 `<style scoped src="./db-workspace.css">` 引入 —— scoped 编译后只作用于本组件，
+   两个工作台的类名本就同源（field-card / node / rail-card …），这里统一成
+   「卡片 12px · 字段白底 36px 高 · 按钮三式 · Chip 化药丸」的 HeroUI + 设置页口径。
+   页面各自的 <style scoped> 只保留：页面骨架（board / rail 布局、容器）、成员抽屉、
+   加载/错误态、sparse-hint 与媒体查询里的页面级调整。 */
+
+/* ---------- 卡片 ---------- */
+.glass {
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 14px;
+}
+.glass-strong {
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border);
+}
+.node {
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.node-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 8px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.node-head b {
+  font-size: 13.5px;
+  color: var(--sa-text-primary);
+}
+.node-note {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--sa-text-tertiary);
+}
+.node-body {
+  padding: 14px 16px 16px;
+}
+
+/* ---------- 字段：白底 12px · label 在上 · 锁改角标 ---------- */
+.form-error {
+  margin: 0 0 8px;
+  padding: 6px 11px;
+  border-radius: 8px;
+  background: rgba(208, 48, 80, 0.1);
+  color: var(--dh-bad);
+  font-size: 12px;
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.field-grid.tight {
+  grid-template-columns: repeat(2, 1fr);
+}
+.field-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px 9px;
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  background: var(--sa-elevated);
+  min-width: 0;
+  box-shadow: var(--field-shadow, none);
+  transition: border-color 0.15s ease;
+}
+.field-card:hover {
+  border-color: var(--sa-accent-border);
+}
+.field-card.locked {
+  background: var(--sa-subtle);
+}
+.field-card.wide {
+  grid-column: 1 / -1;
+}
+.f-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--sa-text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 锁标记：从裸文字变成输入框右上角的圆形小角标 */
+.lock-mark {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--sa-accent);
+  background: var(--sa-accent-subtle);
+  border-radius: 4px;
+  padding: 2px 5px;
+  opacity: 1;
+}
+.f-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--sa-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  outline: none;
+  padding: 2px 0 3px;
+  min-height: 22px;
+  border-bottom: 1px dashed transparent;
+  resize: vertical;
+}
+.f-input:focus {
+  border-bottom-color: var(--sa-accent-border);
+}
+.f-input::placeholder {
+  color: var(--sa-text-tertiary);
+  font-weight: 400;
+}
+
+/* ---------- 按钮三式：紫主 CTA / 白描边次级 / 文字链 ---------- */
+.grow-cta {
+  border: none;
+  border-radius: 9999px;
+  background: var(--sa-accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: filter 0.15s ease;
+}
+.grow-cta:hover {
+  filter: brightness(1.06);
+}
+.grow-cta.block {
+  width: 100%;
+}
+/* 图标版 CTA（搜索补全）：圆形只放图标，窄屏也不会再独占一整行 */
+.grow-cta--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+.grow-link {
+  border: 1px solid var(--sa-border);
+  background: var(--sa-elevated);
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 9999px;
+  padding: 7px 14px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.grow-link:hover {
+  color: var(--sa-accent);
+  border-color: var(--sa-accent-border);
+}
+.inline-link {
+  border: none;
+  background: none;
+  color: var(--sa-accent);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 6px;
+  font-family: inherit;
+}
+.head-link {
+  margin-left: auto;
+}
+
+/* ---------- ident 头：meta 药丸 Chip 化（全圆角） ---------- */
+.ident {
+  display: flex;
+  align-items: center;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  margin-bottom: 12px;
+}
+.ident-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--sa-accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+}
+.ident-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ident-main {
+  flex: 1;
+  min-width: 0;
+}
+.ident-main h1 {
+  margin: 0;
+  font-size: 20px;
+  font-family: 'Playfair Display', 'Iowan Old Style', Palatino, 'Palatino Linotype', 'Songti SC', 'Noto Serif SC', Georgia, serif;
+}
+.h-sub {
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+  font-weight: 400;
+  margin-left: 6px;
+}
+.ident-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.meta-pill {
+  font-size: 11px;
+  padding: 2.5px 10px;
+  border-radius: 9999px;
+  background: var(--sa-subtle);
+  color: var(--sa-text-secondary);
+  /* 药丸内不换行：「2024-11-25 出道」这类带日期的文案窄屏会被折成两行 */
+  white-space: nowrap;
+}
+.meta-pill.warn {
+  background: rgba(217, 119, 6, 0.12);
+  color: var(--dh-warn);
+}
+.meta-pill.ok {
+  background: rgba(24, 160, 88, 0.12);
+  color: var(--dh-ok);
+}
+.meta-pill.su {
+  background: var(--sa-accent-subtle);
+  color: var(--sa-accent);
+}
+.ident-stats {
+  display: flex;
+  gap: 10px 14px;
+  row-gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.stat {
+  text-align: center;
+  min-width: 36px;
+}
+.stat b {
+  display: block;
+  font-size: 16px;
+}
+.stat span {
+  font-size: 10px;
+  color: var(--sa-text-tertiary);
+}
+/* 完整度不再放大：与其它统计同字号（.stat b 16px），颜色仍由行内 style 提供 */
+.ident-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+/* ---------- 成员 / 小分队 / 专辑 / 公司行：12px 圆角 ---------- */
+.member-canvas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 8px;
+}
+.member-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  background: var(--sa-elevated);
+  padding: 8px 10px 7px 22px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--sa-text-primary);
+  transition: border-color 0.15s ease;
+}
+.member-chip:hover,
+.member-chip.open {
+  border-color: var(--sa-accent-border);
+}
+.chip-status {
+  position: absolute;
+  left: 9px;
+  top: 12px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.dot-active {
+  background: var(--dh-ok);
+}
+.dot-former {
+  background: var(--dh-warn);
+}
+.dot-bad {
+  background: var(--dh-bad);
+}
+.chip-name {
+  font-weight: 700;
+  font-size: 12.5px;
+}
+.chip-kr,
+.chip-birth,
+.chip-positions {
+  font-size: 10.5px;
+  color: var(--sa-text-tertiary);
+}
+.chip-su {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--sa-accent);
+  background: var(--sa-accent-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-top: 2px;
+}
+.same-row {
+  text-align: center;
+  color: var(--sa-text-tertiary);
+  padding: 12px 0;
+  font-size: 12.5px;
+}
+.subunit-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.subunit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  padding: 8px 13px;
+  text-decoration: none;
+  color: var(--sa-text-primary);
+  transition: border-color 0.15s ease;
+}
+.subunit-card:hover {
+  border-color: var(--sa-accent-border);
+}
+.su-name {
+  font-weight: 700;
+  font-size: 12.5px;
+}
+.su-meta {
+  font-size: 10.5px;
+  color: var(--sa-text-tertiary);
+}
+.album-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.album-row {
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  background: var(--sa-bg);
+  overflow: hidden;
+}
+.album-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px 8px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.al-chev {
+  color: var(--sa-text-tertiary);
+  width: 12px;
+}
+.al-name {
+  font-weight: 700;
+  font-size: 12.5px;
+}
+.al-meta {
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+  margin-left: 4px;
+}
+.fill-tracks {
+  margin-left: auto;
+  border: 1px solid var(--sa-accent-border);
+  background: var(--sa-accent-subtle);
+  color: var(--sa-accent);
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.album-tracks {
+  border-top: 1px dashed var(--sa-border-subtle);
+  padding: 6px 12px 10px 28px;
+}
+.track-line {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+.tn {
+  width: 28px;
+  color: var(--sa-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.tname {
+  font-weight: 600;
+}
+.company-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.company-chip {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  padding: 7px 12px;
+  background: var(--sa-bg);
+}
+.company-chip b {
+  font-size: 12.5px;
+}
+.company-chip small {
+  font-size: 10.5px;
+  color: var(--sa-text-tertiary);
+}
+
+/* ---------- 右栏：rail 卡 + 体检折叠小节 ---------- */
+.rail-card {
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 12px;
+  padding: 13px 15px;
+}
+.rail-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  color: var(--sa-text-primary);
+  margin: 0 0 8px;
+}
+.grow-card p {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+  line-height: 1.5;
+}
+.cnt-badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--dh-bad);
+  background: rgba(208, 48, 80, 0.12);
+  border-radius: 9999px;
+  padding: 1px 8px;
+}
+.side-empty {
+  font-size: 11.5px;
+  color: var(--sa-text-tertiary);
+  line-height: 1.7;
+}
+.issue {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px dashed var(--sa-border-subtle);
+  align-items: flex-start;
+}
+.issue:first-of-type {
+  border-top: none;
+}
+.sev-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+.sev-badge.sev-error {
+  background: rgba(208, 48, 80, 0.12);
+  color: var(--dh-bad);
+}
+.sev-badge.sev-warning {
+  background: rgba(217, 119, 6, 0.12);
+  color: var(--dh-warn);
+}
+.sev-badge.sev-hint {
+  background: var(--sa-subtle);
+  color: var(--sa-text-tertiary);
+}
+.issue-tx {
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.issue-sub {
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+  margin-top: 2px;
+}
+.src-line {
+  display: block;
+  font-size: 11px;
+  color: var(--sa-accent);
+  text-decoration: none;
+  padding: 3px 0;
+  word-break: break-all;
+}
+.lock-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.lock-all-btn {
+  border: 1px solid var(--sa-accent);
+  background: var(--sa-accent-subtle);
+  color: var(--sa-accent);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.lock-all-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.lock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 0;
+  border-top: 1px dashed var(--sa-border-subtle);
+}
+.unlock-btn {
+  border: 1px solid var(--sa-border);
+  background: none;
+  color: var(--sa-text-secondary);
+  border-radius: 7px;
+  font-size: 10.5px;
+  padding: 2px 9px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* 体检卡：摘要行 + 折叠小节 */
+.ws-sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.ws-sum__i {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sa-text-secondary);
+}
+.ws-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.ws-dot--ok {
+  background: var(--dh-ok);
+}
+.ws-dot--warn {
+  background: var(--dh-warn);
+}
+.ws-dot--bad {
+  background: var(--dh-bad);
+}
+.ws-dot--src {
+  background: var(--sa-text-tertiary);
+}
+.ws-dot--lock {
+  background: var(--sa-accent);
+}
+.ws-sec {
+  border-top: 1px solid var(--sa-border-subtle);
+  padding: 4px 0 2px;
+}
+.ws-sec:first-of-type {
+  border-top: none;
+}
+.ws-sec summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--sa-text-secondary);
+  padding: 6px 0;
+  user-select: none;
+}
+.ws-sec summary::-webkit-details-marker {
+  display: none;
+}
+.ws-sec summary::before {
+  content: '▸';
+  color: var(--sa-text-tertiary);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+.ws-sec[open] summary::before {
+  transform: rotate(90deg);
+}
+.ws-sec summary .cnt-badge {
+  margin-left: auto;
+}
+.ws-sec > .side-empty,
+.ws-sec > .issue,
+.ws-sec > .src-line,
+.ws-sec > .lock-actions,
+.ws-sec > .lock-row {
+  margin-left: 2px;
+}
+
+/* ---------- 首页主舞台开关：原生 checkbox → sa-switch 口径 ---------- */
+.home-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sa-text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+.home-toggle input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 40px;
+  height: 22px;
+  border-radius: 9999px;
+  background: var(--sa-hover);
+  border: 1px solid var(--sa-border);
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin: 0;
+}
+.home-toggle input:checked {
+  background: var(--sa-accent);
+  border-color: var(--sa-accent);
+}
+.home-toggle input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: transform 0.2s;
+}
+.home-toggle input:checked::after {
+  transform: translateX(18px);
+}
+
+/* ---------- 响应式（共享组件部分） ---------- */
+@media (max-width: 960px) {
+  .field-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 768px) {
+  /* 身份条窄屏固定两行：
+       行 1 = 头像 + 名称/药丸    行 2 = 统计（左）+ 操作按钮（右）
+     原 flex 布局里 .ident-main 是 flex:1（basis 0%），统计/按钮能整体塞进第一行时
+     它只剩几十像素 —— 名称逐字折行、药丸被挤成竖条。改 grid 后每行归属确定，不再互相挤。 */
+  .ident {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    padding: 11px 14px;
+    gap: 9px 10px;
+  }
+  .ident-avatar {
+    grid-area: 1 / 1 / 2 / 2;
+  }
+  .ident-main {
+    grid-area: 1 / 2 / 2 / -1;
+  }
+  .ident-stats {
+    grid-area: 2 / 1 / 3 / -2;
+  }
+  .ident-actions {
+    grid-area: 2 / -2 / 3 / -1;
+  }
+  .ident-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+  .ident-main h1 {
+    font-size: 17px;
+    overflow-wrap: anywhere;
+  }
+  .ident-stats {
+    gap: 8px 14px;
+  }
+  .stat {
+    min-width: 32px;
+  }
+  .stat b {
+    font-size: 15px;
+  }
+  .node-head {
+    padding: 10px 12px;
+  }
+  .node-body {
+    padding: 12px;
+  }
+  .field-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  /* 日期字段独占整行：分段输入 + 清除 + 日历按钮最低要约 190px，
+     两列网格里会被挤成「2024 / 11 × 25」这种错位（桌面不受影响） */
+  .field-card--date,
+  .ws-field--date {
+    grid-column: 1 / -1;
+  }
+  .member-canvas {
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  }
+  .rail-card {
+    padding: 11px 12px;
+  }
+  .ident-meta {
+    gap: 4px;
+  }
+  .meta-pill {
+    font-size: 10.5px;
+    padding: 2px 8px;
+  }
+}
+
+/* ---------- 基本信息字段行（对齐待整理页：form-label + sa-input、视频类型单选形态） ---------- */
+.ws-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+.ws-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ws-field--wide {
+  grid-column: 1 / -1;
+}
+.ws-label {
+  font-size: 12px;
+  color: var(--sa-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}

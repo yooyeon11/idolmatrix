@@ -1,0 +1,50 @@
+# ===== Docker 构建上下文排除 =====
+
+# 本地数据与存储不入镜像（容器内由卷挂载提供）
+backend/data/
+backend/storage/
+*.db
+*.db-journal
+*.sqlite
+
+# ★ ffmpeg 引擎的下载缓存与解包中间产物（几百 MB，构建完全不需要）。
+#   真正要进镜像的只有 docker/jellyfin/（在下面**没有被排除**，别手滑加进来）。
+#   清掉它代价为零：重跑 scripts/fetch_jellyfin_ffmpeg.py 即可重建。
+.ffmpeg-dist/
+
+# 仓库内文档与截图归档（~118MB，构建不需要）
+docs/
+
+# 本机 agent 工作目录（记忆 / 日志，与构建无关）
+.workbuddy/
+
+# 导出的镜像包不入构建上下文
+*.tar
+
+# 本地环境变量（含 Windows 专属 FFmpeg 路径）
+.env
+backend/.env
+.env.nas.example
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 开发/测试脚本（仅本机使用，不入生产镜像）
+backend/test_*.py
+backend/e2e_cases.py
+backend/run_dev.py
+backend/.pytest_cache
+
+# Node 产物（前端在镜像内重新构建）
+frontend/node_modules/
+frontend/dist/
+
+# 版本控制 / 系统文件
+.git/
+.gitignore
+.DS_Store
+Thumbs.db
+
+# 部署目录自身
+deploy/

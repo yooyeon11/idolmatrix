@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<body>
+<script>
+(async () => {
+  const log = (...a) => console.log('PROBE|' + a.join('|'));
+  log('isSecureContext', window.isSecureContext);
+  log('mcExists', typeof navigator.mediaCapabilities?.decodingInfo);
+
+  const v = document.createElement('video');
+  log('canPlayType_h264', v.canPlayType('video/mp4; codecs="avc1.42E01E"') || '(empty)');
+
+  try {
+    const r = await navigator.mediaCapabilities.decodingInfo({
+      type: 'file',
+      video: { contentType: 'video/mp4; codecs="avc1.42E01E"', width: 1920, height: 1080, bitrate: 6000000, framerate: 30 },
+    });
+    log('decodingInfo_h264', `supported=${r.supported} smooth=${r.smooth} pe=${r.powerEfficient}`);
+  } catch (e) {
+    log('decodingInfo_h264_THREW', e.name + ': ' + e.message);
+  }
+  try {
+    const r = await navigator.mediaCapabilities.decodingInfo({
+      type: 'file',
+      video: { contentType: 'video/mp4; codecs="hvc1.1.6.L153.B0"', width: 3840, height: 2160, bitrate: 15000000, framerate: 30 },
+    });
+    log('decodingInfo_hevc4k', `supported=${r.supported} smooth=${r.smooth} pe=${r.powerEfficient}`);
+  } catch (e) {
+    log('decodingInfo_hevc4k_THREW', e.name + ': ' + e.message);
+  }
+  try {
+    const r = await navigator.mediaCapabilities.decodingInfo({
+      type: 'media-source',
+      video: { contentType: 'video/mp4; codecs="vp09.00.51.08"', width: 3840, height: 2160, bitrate: 15000000, framerate: 30 },
+    });
+    log('decodingInfo_vp9ms', `supported=${r.supported} smooth=${r.smooth} pe=${r.powerEfficient}`);
+  } catch (e) {
+    log('decodingInfo_vp9ms_THREW', e.name + ': ' + e.message);
+  }
+  document.title = 'DONE';
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# ===== Web 框架 =====
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
+# ===== 数据层 =====
+SQLAlchemy>=2.0.30
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+alembic>=1.13.2
+argon2-cffi>=23.1.0
+
+# ===== 工具 =====
+# 注意：本项目不使用 ffmpeg-python 等绑定库，所有媒体处理统一通过 subprocess 调用 ffmpeg/ffprobe，
+# 以便对参数、日志、错误码有完全控制。
+# 封面焦点检测（人脸居中裁切）例外地使用 OpenCV：YuNet/Haar 均为纯本地推理，无网络/API 依赖；
+# 未安装时功能自动降级为居中显示，不影响其余能力。
+opencv-python-headless>=4.9.0

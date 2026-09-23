@@ -1,0 +1,356 @@
+/* ===== 资料库控件统一口径 =====
+   与项目定稿页面（待整理 / AI 设置 / 基础设置）同源 —— 照 HeroUI v3 的字段与按钮规格：
+     字段类：36px 高 / 12px 圆角 / 13px 字号 / 白底 --sa-elevated + 1px --sa-border 描边
+             + 轻投影（深色 none）+ 中性聚焦（不用紫色光晕）
+     主按钮：36px 高 / rounded-3xl(24px) / accent 实底白字
+     次级按钮：胶囊 / 白底 + --sa-border 描边
+   为什么放全局（非 scoped）：① 资料库这几个控件分散在 4 个组件里 —— 工作台面板 / 公司关系编辑器 /
+   照片搜索卡 / 图片文件夹；② naive-ui 的 .n-base-selection 与它 teleport 到 body 的下拉菜单，
+   在 scoped 里反而要写 :deep 穿透。naive-ui 把主题变量内联在元素 style 上 → --n-* 一律 !important。
+
+   用法（资料库家族内的“同类控件只用同一个类”）：
+     文本输入      class="sa-input"        （标题 / 名称 / 担当 / 网址 / 搜索词…）
+     文本域        class="sa-textarea"
+     下拉选择      class="sa-select" + :menu-props="{ class: 'sa-select-menu' }"
+     主按钮        class="sa-btn-add"
+     次级按钮      class="sa-btn-ghost"（危险态加 is-danger）
+     添加行容器    class="sa-add-row"
+     结果行容器    class="sa-row"
+     空态文案      class="sa-empty"
+*/
+
+/* ---------- 字段：文本输入 / 文本域 ---------- */
+.sa-input,
+.sa-textarea {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  color: var(--sa-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06); /* --field-shadow */
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.sa-input:focus,
+.sa-textarea:focus {
+  border-color: color-mix(in srgb, var(--sa-text-primary) 30%, transparent);
+}
+.sa-input::placeholder,
+.sa-textarea::placeholder {
+  color: var(--sa-text-tertiary);
+}
+.sa-input:disabled,
+.sa-textarea:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 文本域：多行，高度自适应 */
+.sa-textarea {
+  height: auto;
+  padding: 10px 12px;
+  line-height: 1.6;
+  resize: vertical;
+  min-height: 84px;
+}
+
+/* 深色下 HeroUI 的 --field-shadow 为 none，照做（否则深色底会出现脏投影） */
+html[data-theme='dark'] .sa-input,
+html[data-theme='dark'] .sa-textarea {
+  box-shadow: none;
+}
+
+/* ---------- 字段：下拉选择（naive-ui n-select 皮肤） ---------- */
+.sa-select {
+  width: 100%;
+}
+.sa-select .n-base-selection {
+  --n-height: 36px !important;
+  --n-border-radius: 12px !important;
+  --n-color: var(--sa-elevated) !important;
+  --n-color-active: var(--sa-elevated) !important;
+  --n-border: 1px solid var(--sa-border) !important;
+  --n-border-hover: 1px solid var(--sa-border) !important;
+  --n-border-focus: 1px solid color-mix(in srgb, var(--sa-text-primary) 30%, transparent) !important;
+  --n-border-active: 1px solid color-mix(in srgb, var(--sa-text-primary) 30%, transparent) !important;
+  --n-box-shadow-hover: 0 2px 4px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06) !important;
+  --n-box-shadow-active: 0 2px 4px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06) !important;
+  --n-box-shadow-focus: 0 2px 4px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06) !important;
+  --n-font-size: 13px !important;
+  --n-text-color: var(--sa-text-primary) !important;
+  --n-placeholder-color: var(--sa-text-tertiary) !important;
+  --n-arrow-color: var(--sa-text-tertiary) !important;
+  --n-padding-multiple-top: 4px !important;
+  --n-padding-multiple-bottom: 4px !important;
+  --n-padding-multiple-left: 12px !important;
+  --n-padding-multiple-right: 12px !important;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06);
+}
+html[data-theme='dark'] .sa-select .n-base-selection {
+  box-shadow: none;
+  --n-box-shadow-hover: none !important;
+  --n-box-shadow-active: none !important;
+  --n-box-shadow-focus: none !important;
+}
+
+/* 多选已选项：**不要胶囊框**，做成「名字 ×」纯文本。
+   naive 的标签是 inline-flex（高 == --n-height、有 --n-color 背景、__border 独立层），
+   这里把背景/圆角/边框全部清掉；__close 是普通 flex 子元素（只带 close-margin），
+   所以可以放心把 padding 归零、由 margin 控距。
+   排版见下面「已选项网格」：容器宽处每行 2 个、窄处每行 1 个，选多了自动多行。 */
+.sa-select .n-base-selection-tag-wrapper .n-tag {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--sa-text-primary);
+  font-size: 13px;
+  height: auto;
+  padding: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+.sa-select .n-base-selection-tag-wrapper .n-tag__border {
+  display: none;
+}
+/* 名称过长时省略号收尾，撑不破所在列（naive 只给了 ellipsis 没给 nowrap） */
+.sa-select .n-base-selection-tag-wrapper .n-tag__content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sa-select .n-base-selection-tag-wrapper .n-tag__close {
+  margin: 0 0 0 4px;
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+}
+.sa-select .n-base-selection-tag-wrapper .n-tag__close:hover {
+  color: var(--sa-text-primary);
+}
+
+/* ---------- 多选已选项：网格排版（每行 1~4 个，可多行） ----------
+   需求：一个选择器选了多个内容时，不要全挤在一行（旧行为是 maxTagCount="responsive"
+   把放不下的收进「+N」），而是按容器宽度铺成 1~4 列、多行排开，看得到全部已选。
+   ① 基准 = 每行 1 个；② 容器够宽才加列（300 / 460 / 600px）—— 用容器查询跟控件自身宽度走，
+      同一个 `.sa-select` 在窄侧栏和宽弹窗里列数不同，比媒体查询准。
+   ③ 竖分隔线只画在「同一行里、左边还有内容」的项上：k 列网格里第 (k·n+1) 个正好是每行第一个，
+      于是用 `:not(:nth-child(k n + 1))` 就能精确排除行首 —— **行尾 / 行首都不会多出竖线**。
+      1 列时（窄容器）不画任何线，每行只有一个内容，本来也不需要分隔。 */
+.sa-select {
+  container-type: inline-size;
+  container-name: sa-select;
+}
+.sa-select .n-base-selection-tags {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 2px;
+  align-items: center;
+}
+.sa-select .n-base-selection-tag-wrapper {
+  min-width: 0;
+  box-sizing: border-box;
+}
+/* 分隔线：18px 列间距 = 左右各留一段，让线正好落在两列文字中间
+   （左列 tag 自带 7px 右 padding、右列项带 12px 左 padding）。
+   ⚠ 档位是累加的，宽档必须先把窄档画过的线**清掉**再按自己的列数重画，
+     否则 3 列时第 4 项（行首）会带着 2 列档留下的线 → 行首多一条竖线。
+     清线用的选择器带三个类（0,3,0），与下面带 :not() 的规则同特异性，靠源码顺序压住。 */
+@container sa-select (min-width: 300px) {
+  .sa-select .n-base-selection-tags {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 18px;
+  }
+  .sa-select .n-base-selection-tag-wrapper:not(:nth-child(2n + 1)) {
+    border-left: 1px solid var(--sa-tag-sep, var(--sa-border));
+    padding-left: 12px;
+    margin-left: -12px;
+  }
+}
+@container sa-select (min-width: 460px) {
+  .sa-select .n-base-selection-tags {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .sa-select .n-base-selection-tags .n-base-selection-tag-wrapper {
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+  }
+  .sa-select .n-base-selection-tag-wrapper:not(:nth-child(3n + 1)) {
+    border-left: 1px solid var(--sa-tag-sep, var(--sa-border));
+    padding-left: 12px;
+    margin-left: -12px;
+  }
+}
+@container sa-select (min-width: 600px) {
+  .sa-select .n-base-selection-tags {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .sa-select .n-base-selection-tags .n-base-selection-tag-wrapper {
+    border-left: none;
+    padding-left: 0;
+    margin-left: 0;
+  }
+  .sa-select .n-base-selection-tag-wrapper:not(:nth-child(4n + 1)) {
+    border-left: 1px solid var(--sa-tag-sep, var(--sa-border));
+    padding-left: 12px;
+    margin-left: -12px;
+  }
+}
+/* 修「多选下拉点击瞬间变高」：naive 激活瞬间会显示筛选输入框
+   （.n-base-selection-input-tag），默认高 calc(--n-height - 6px)=30px + margin 3px，
+   超出标签内容区（36px - 上下 padding 8px = 28px）→ 容器被撑高。
+   压到 calc(--n-height - 12px) = 24px，激活前后尺寸不变。单选无此元素。 */
+.sa-select .n-base-selection-input-tag {
+  height: calc(var(--n-height) - 12px);
+  line-height: calc(var(--n-height) - 12px);
+}
+
+/* 下拉面板：naive-ui 把菜单 teleport 到 body，只能在全局定义（类名随 :menu-props 传入） */
+.sa-select-menu.n-base-select-menu {
+  border-radius: 16px;
+  padding: 6px;
+  background-color: var(--sa-elevated);
+  border: 1px solid var(--sa-border-subtle);
+  box-shadow:
+    0 12px 32px rgba(15, 23, 42, 0.1),
+    0 2px 8px rgba(15, 23, 42, 0.06);
+}
+.sa-select-menu .n-base-select-option {
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--sa-text-primary);
+}
+.sa-select-menu .n-base-select-option--pending::before,
+.sa-select-menu .n-base-select-option--selected::before {
+  background-color: var(--sa-hover);
+  border-radius: 8px;
+}
+.sa-select-menu .n-base-select-option--selected {
+  color: var(--sa-text-primary);
+}
+.sa-select-menu .n-base-select-option__check {
+  color: var(--sa-text-primary);
+}
+.sa-select-menu .n-empty {
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+}
+/* 选项里的色点（强调色选择器用，见 SettingsView 的 renderAccentLabel）。
+   ⚠ 下拉挂在 body 下 + 已选值由 render-label 渲染 —— 两处都拿不到 scoped 属性，必须放全局。 */
+.sa-accent-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sa-accent-opt__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  flex: none;
+}
+
+/* ---------- 按钮：主（accent 实底）/ 次（白底描边） ---------- */
+.sa-btn-add {
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 24px; /* HeroUI rounded-3xl；36px 高时视觉等同胶囊，同 .grow-cta */
+  background: var(--sa-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+.sa-btn-add:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.sa-btn-add:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sa-btn-ghost {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--sa-border);
+  border-radius: 9999px;
+  background: var(--sa-elevated);
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.sa-btn-ghost:hover:not(:disabled) {
+  color: var(--sa-accent);
+  border-color: var(--sa-accent-border);
+}
+.sa-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sa-btn-ghost.is-danger:hover:not(:disabled) {
+  color: var(--dh-bad, #d03050);
+  border-color: var(--dh-bad, #d03050);
+}
+
+/* ---------- 添加行：虚线分隔 + 控件间统一 8px ---------- */
+.sa-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--sa-border-subtle);
+}
+/* 行内控件按角色分配伸缩：选择器最宽，其次输入框，按钮不缩 */
+.sa-add-row > .sa-select,
+.sa-add-row > .n-select {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.sa-add-row > .sa-input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+/* ---------- 结果行：白底 + --sa-border 描边 + 12px 圆角（与字段同语言） ---------- */
+.sa-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  background: var(--sa-elevated);
+  min-width: 0;
+}
+
+/* ---------- 空态文案 ---------- */
+.sa-empty {
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+  line-height: 1.7;
+}

@@ -1,0 +1,32 @@
+{
+  "name": "kpop-media-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node scripts/patch-xgplayer-hls.mjs && vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit",
+    "postinstall": "node scripts/patch-xgplayer-hls.mjs"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "naive-ui": "^2.40.1",
+    "pinia": "^2.2.4",
+    "vue": "^3.5.12",
+    "vue-router": "^4.4.5",
+    "xgplayer": "^3.0.26",
+    "xgplayer-hls.js": "^3.0.26"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@vitejs/plugin-vue": "^5.1.4",
+    "@vue/tsconfig": "^0.5.1",
+    "typescript": "~5.6.3",
+    "unplugin-auto-import": "^0.18.3",
+    "unplugin-vue-components": "^0.27.4",
+    "vite": "^5.4.10",
+    "vue-tsc": "^2.1.10"
+  }
+}
