@@ -3,7 +3,7 @@
 > 自建的 K-pop 舞台 / 直拍 / 短视频本地媒体库：素材丢进目录 → AI 辅助识别 → 人工确认 → 结构化归档 → 浏览器直接播。
 > 单容器跑在 NAS 上，手机和电脑都能用。
 
-![首页](docs/github-readme/01-home.png)
+![首页](docs/github-readme/01-home.jpg)
 
 ---
 
