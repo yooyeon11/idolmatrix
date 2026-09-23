@@ -96,3 +96,16 @@ idolmatrix-记忆导出-*.md
 .workbuddy/
 .trae/
 .gy-shots/
+
+# ===== ★ 只保留「能跑起来的项目本体」（2026-09-23 业主口径）=====
+# 仓库里只留运行需要的代码 / 配置 / 构建文件；截图、设计稿、过程文档一律不入库。
+# 唯一例外：README.md 引用的 docs/github-readme/ 配图保留（否则 README 全是裂图）。
+# 注意：刻意不写 `docs/**` —— 目录级排除会把 docs/github-readme/ 一起锁死，
+# 之后再用 ! 也救不回来（git 不会进入被排除的目录）。所以按「子目录 + 扩展名」精确排除。
+/docs/*.png
+/docs/*.md
+/docs/mockups/
+/docs/post-card-preview/
+/gui-test-screenshots/
+/*.png
+/*.jpg
