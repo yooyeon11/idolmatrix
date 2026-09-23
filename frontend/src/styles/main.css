@@ -1,0 +1,471 @@
+/* Playfair Display：首页杂志封面大标题（IU / IRENE 那种衬线刊头） */
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/playfair-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../assets/fonts/playfair-500.woff2') format('woff2');
+}
+
+/* ===== 全局主题令牌 =====
+   浅色为默认（:root），深色通过 html[data-theme='dark'] 覆盖。
+   HomeView / SettingsView 使用 --sa-*；管理布局使用 --app-*。 */
+
+:root {
+  --app-sidebar-width: 220px;
+  --app-header-height: 48px;
+  --sa-bottom-bar-height: 0px;
+
+  /* ---- 管理布局（浅色） ---- */
+  --app-bg: #f5f7fa;
+  --app-text: #1f2329;
+  --app-header-bg: #ffffff;
+  --app-card-bg: #ffffff;
+  --app-border: #e8ebf0;
+  --app-text-secondary: #5b6470;
+  --app-text-tertiary: #77818f;
+
+  /* ---- 门户页 sa 系列（浅色） ---- */
+  --sa-bg: #f7f8fa;
+  --sa-elevated: #ffffff;
+  --sa-subtle: #eef0f4;
+  --sa-hover: #e6e9f0;
+  --sa-border-subtle: rgba(15, 23, 42, 0.06);
+  --sa-border: rgba(15, 23, 42, 0.12);
+  --sa-text-primary: #1f2329;
+  --sa-text-secondary: #5b6470;
+  --sa-text-tertiary: #77818f;
+  /* 基础默认 = 经典蓝（HeroUI 蓝）。紫色档已移除，见 stores/theme.ts 的 ThemeAccent */
+  --sa-accent: #0485f7;
+  --sa-accent-hover: #3592f9;
+  --sa-accent-subtle: rgba(4, 133, 247, 0.15);
+  --sa-accent-border: rgba(4, 133, 247, 0.35);
+  --sa-accent-2: #78bbff;
+  --sa-series-1: #0485f7;
+  --sa-series-2: #48a0ff;
+  --sa-series-3: #78bbff;
+  --sa-series-4: #a8d5ff;
+  --sa-header-bg: rgba(255, 255, 255, 0.85);
+  --sa-img-overlay: rgba(14, 14, 18, 0.92);
+  /* HeroUI v3 的 --shadow-surface 三层轻投影（与 AI / 基础设置页现有写法同配方）。
+     照片墙帖子卡片 / 帖子大卡片用它替代原来的 1px 描边。 */
+  --sa-surface-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06);
+  /* hover 态：投影加重（深色档改为 1px 描边环，见下方深色块） */
+  --sa-surface-shadow-hover:
+    0 6px 18px rgba(0, 0, 0, 0.08),
+    0 2px 6px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06);
+
+  /* ---- HeroUI v3 表单字段令牌（Form / TextField / Input / Button 复刻用） ----
+     ⚠ HeroUI 的字段**没有描边**：--field-border-width: 0px、--field-border: transparent，
+     靠 field 背景 + 投影与页面底色区分（不是靠 1px 边框）。
+     它的 --field-shadow 与 --shadow-surface 是**逐字同一串值**，所以直接复用上面的三层投影。
+
+     下面几条用 color-mix 照搬 HeroUI 的算式而非写死 hex —— CSS 自定义属性是延迟解析的，
+     var() 在使用处按当前主题取值，因此**一次定义即自动跟随深浅色**，无需在深色块重复。 */
+  --sa-field-bg: var(--sa-elevated); /* HeroUI --field-background（浅 white / 深 surface） */
+  --sa-field-fg: var(--sa-text-primary);
+  --sa-field-placeholder: var(--sa-text-secondary);
+  /* HeroUI --field-radius = calc(var(--radius) 8px * 1.5) */
+  --sa-field-radius: 12px;
+  --sa-field-shadow: var(--sa-surface-shadow); /* 深色档自动变 none */
+  /* HeroUI --field-hover = mix(field-bg 90%, field-fg 2%)（权重归一化后 ≈ 97.8/2.2） */
+  --sa-field-hover: color-mix(in oklab, var(--sa-elevated) 90%, var(--sa-text-primary) 2%);
+  /* HeroUI --field-border-hover / -focus：对 transparent 做 mix → 得到半透明前景色描边 */
+  --sa-field-border-hover: color-mix(in oklab, transparent 88%, var(--sa-text-primary) 10%);
+  --sa-field-border-focus: color-mix(in oklab, transparent 74%, var(--sa-text-primary) 22%);
+  /* HeroUI --focus 就是 --accent；焦点环 = 2px 实色环、无 offset（focus-field-ring） */
+  --sa-focus: var(--sa-accent);
+  --sa-default: #ebebec; /* HeroUI light --default（secondary/ghost 按钮底） */
+  /* HeroUI --default-hover = mix(default 96%, default-foreground 4%) */
+  --sa-default-hover: color-mix(in oklab, var(--sa-default) 96%, var(--sa-text-primary) 4%);
+
+  /* ⚠ --sa-danger 此前**从未定义**，全站 8 处 var(--sa-danger, #e5484d) 一直在吃 fallback。
+     这里正式定义，取值照 HeroUI 默认主题的 --danger（浅 oklch(.6532 .2328 25.74)）。
+     注意：定义后全站危险色会从旧的 #e5484d 变为 #ff383c（更亮更饱和），如需回退改这一行即可。 */
+  --sa-danger: #ff383c;
+}
+
+/* 玫瑰暖调：由基础设置切换，仅覆盖强调色变量 */
+html[data-accent='rose'] {
+  --sa-accent: #e11d48;
+  --sa-accent-hover: #be123c;
+  --sa-accent-subtle: rgba(225, 29, 72, 0.08);
+  --sa-accent-border: rgba(225, 29, 72, 0.35);
+  --sa-accent-2: #f0709a;
+  --sa-series-1: #f43f5e;
+  --sa-series-2: #fb7185;
+  --sa-series-3: #fda4af;
+  --sa-series-4: #fecdd3;
+}
+
+/* HeroUI 蓝：取自 HeroUI 默认主题的 --accent（oklch(62.04% 0.195 253.83) = #0485f7），
+   深浅色共用同一个 accent；hover / soft 照搬它的 color-mix 配方：
+   hover = mix(accent 90%, snow 10%)、soft = mix(accent 15%, transparent)。 */
+html[data-accent='blue'] {
+  --sa-accent: #0485f7;
+  --sa-accent-hover: #3592f9;
+  --sa-accent-subtle: rgba(4, 133, 247, 0.15);
+  --sa-accent-border: rgba(4, 133, 247, 0.35);
+  --sa-accent-2: #78bbff;
+  --sa-series-1: #0485f7;
+  --sa-series-2: #48a0ff;
+  --sa-series-3: #78bbff;
+  --sa-series-4: #a8d5ff;
+}
+
+html[data-theme='dark'] {
+  /* ---- 管理布局（深色） ---- */
+  --app-bg: #0e0e12;
+  --app-text: #ececf1;
+  --app-header-bg: #15151b;
+  --app-card-bg: #15151b;
+  --app-border: rgba(255, 255, 255, 0.1);
+  --app-text-secondary: #9898a8;
+  --app-text-tertiary: #7d7d8e;
+
+  /* ---- 门户页 sa 系列（深色） ---- */
+  --sa-bg: #0e0e12;
+  --sa-elevated: #15151b;
+  --sa-subtle: #1c1c24;
+  --sa-hover: #22222c;
+  --sa-border-subtle: rgba(255, 255, 255, 0.06);
+  --sa-border: rgba(255, 255, 255, 0.1);
+  --sa-text-primary: #ececf1;
+  --sa-text-secondary: #9898a8;
+  --sa-text-tertiary: #7d7d8e;
+  /* 基础默认 = 经典蓝（深色口径，同 html[data-theme='dark'][data-accent='blue']） */
+  --sa-accent: #0485f7;
+  --sa-accent-hover: #3592f9;
+  --sa-accent-subtle: rgba(4, 133, 247, 0.12);
+  --sa-accent-border: rgba(4, 133, 247, 0.4);
+  --sa-accent-2: #61a8fb;
+  --sa-header-bg: rgba(14, 14, 18, 0.88);
+  --sa-img-overlay: rgba(14, 14, 18, 0.92);
+  /* HeroUI 在深色下把 --shadow-surface 置为 none，照做（否则深色底会出现脏投影）。
+     深色下卡片靠 --sa-elevated(#15151b) 与 --sa-bg(#0e0e12) 的明度差区分，不靠描边。 */
+  --sa-surface-shadow: none;
+  /* 深色下没有投影可用，hover 改用 1px 描边环（无模糊，成本极低） */
+  --sa-surface-shadow-hover: 0 0 0 1px rgba(255, 255, 255, 0.14);
+
+  /* 表单字段令牌多数自动跟随主题（见浅色块的说明），这里只补两个需要换值的：
+     danger 深色口径 oklch(0.594 0.1967 24.63)；default 深色底。 */
+  --sa-danger: #db3b3e;
+  --sa-default: #27272a;
+}
+
+/* 玫瑰暖调（深色）：需在深色块之后，双属性选择器保证优先级 */
+html[data-theme='dark'][data-accent='rose'] {
+  --sa-accent: #fb4d74;
+  --sa-accent-hover: #f76f90;
+  --sa-accent-subtle: rgba(251, 77, 116, 0.14);
+  --sa-accent-border: rgba(251, 77, 116, 0.4);
+  --sa-accent-2: #d0698f;
+}
+
+/* HeroUI 蓝（深色）：accent 与浅色同值 —— HeroUI 的 --accent 本就是深浅共用；
+   soft 用它的深色口径 12%。需在深色块之后。 */
+html[data-theme='dark'][data-accent='blue'] {
+  --sa-accent: #0485f7;
+  --sa-accent-hover: #3592f9;
+  --sa-accent-subtle: rgba(4, 133, 247, 0.12);
+  --sa-accent-border: rgba(4, 133, 247, 0.4);
+  --sa-accent-2: #61a8fb;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  /* 全站正文与 UI = 阿里巴巴普惠体 3.0（本地分片，见 font-puhuiti.css）。
+     首页轮播 hero 区不跟随，单独锁定系统字体栈（见 .cinema-wrap / .mag-wrap）。 */
+  font-family: 'Alibaba PuHuiTi 3.0', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei',
+    sans-serif;
+  background: var(--app-bg, #f5f7fa);
+  color: var(--app-text, #1f2329);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+body {
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --sa-bottom-bar-height: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+  body {
+    /* 基础规则把 body 钉死为 height:100%（视口高，border-box 含 padding），
+       页面内容是从 body 溢出滚动的，padding-bottom 落在固定盒内、
+       不会在内容之后产生滚动空间——底栏会盖住最后一截内容。
+       手机端放开为自适应高度，底部预留才真正生效。 */
+    height: auto;
+    min-height: 100%;
+    padding-bottom: var(--sa-bottom-bar-height);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* button 不继承字体（浏览器默认 UI 字体），统一站点字体 */
+button {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(120, 130, 150, 0.3);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 130, 150, 0.45);
+}
+
+/* ===== 数据库编辑弹窗：内容区内滚动，header 与保存按钮恒可见 ===== */
+/* （弹窗卡片由 naive-ui 渲染，拿不到面板 scoped 属性，故放全局） */
+.db-edit-modal .n-card__content,
+.db-edit-modal .n-card-content {
+  max-height: calc(100vh - 200px);
+  max-height: calc(100dvh - 200px);
+  overflow-y: auto;
+}
+@media (max-width: 768px) {
+  .db-edit-modal .n-card__content,
+  .db-edit-modal .n-card-content {
+    max-height: calc(100vh - 170px);
+    max-height: calc(100dvh - 170px);
+  }
+}
+
+
+/* ===== iOS Safari：聚焦字号 < 16px 的输入控件会触发「页面自动放大」 ===== */
+/* 现象：在 iPhone 上点歌曲/专辑/日期等输入框，整页被放大且不会自动还原
+   （表现为"点一下页面就变宽、内容溢出屏幕"）。
+   判定依据是「被聚焦元素的 computed font-size < 16px」；viewport 的
+   maximum-scale / user-scalable 在 iOS Safari 上会被忽略，唯一可靠解法是把字号提到 16px。
+   naive-ui 内嵌的搜索输入框自带 `font-size: inherit`（类选择器优先级高于元素选择器），
+   所以必须带 !important 才能覆盖。桌面端不受影响（本规则仅在窄屏生效）。 */
+@media (max-width: 768px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* 专辑多选（曲目区，VideoTrackList 里的 .album-select）：不需要竖分隔线，
+   只用列间距分隔（网格排版本身在 styles/db-controls.css 的「已选项网格」）。 */
+.album-select {
+  --sa-tag-sep: transparent;
+}
+
+/* ===== 待整理「编辑元数据」卡：灰底控件统一改白底 ===== */
+/* 卡内输入框原本是 --sa-subtle 灰底，与同一张卡上方的视频类型 / 曲目选择器（已是白底）并存 →
+   一张卡里出现灰、白两种底色。这里把该卡内的控件统一为白底。
+   两个必要的配套：
+   ① 白底与卡片（同为 --sa-elevated）同色，边框必须从 6% 的 --sa-border-subtle 提到
+      --sa-border（浅 12% / 深 10%），否则框会"消失"；
+   ② 聚焦改用中性加深（不用紫色 --sa-accent-border，与 .sa-select 口径一致）。
+   选择器写成 .detail-right .form-card <元素>（特异性 0,3,0）：因为 .sa-input / .sa-textarea /
+   .track-row 等都定义在 `<style scoped src>` 里，编译后是 .sa-input[data-v-x]（0,2,0），
+   同特异性下会被后注入的组件样式压掉。
+   作用域 .detail-right 只出现在待整理详情页右栏，不影响其它设置面板的输入框。 */
+.detail-right .form-card .sa-input,
+.detail-right .form-card .sa-textarea,
+.detail-right .form-card .form-check,
+.detail-right .form-card .track-row,
+.detail-right .form-card .mini-btn {
+  background: var(--sa-elevated);
+  border-color: var(--sa-border);
+}
+.detail-right .form-card .sa-input:focus,
+.detail-right .form-card .sa-textarea:focus {
+  border-color: color-mix(in srgb, var(--sa-text-primary) 30%, transparent);
+}
+/* 注：选择器（.sa-select）**不列入**上面这组 —— 它是 n-select 的根节点，
+   白底 / 描边 / 中性聚焦已由 styles/db-controls.css 的 `.sa-select .n-base-selection`
+   直接落在 naive 的框上；给根节点再加一层 background/border 就是"组件套娃"。 */
+
+/* ===== 待整理页：框的圆角 / 高度统一（照 HeroUI 的 radius 与尺寸体系） ===== */
+/* 参考数值（heroui v3 themes/default/variables.css + components/button.css）：
+   --radius = 0.5rem(8px)；--field-radius = calc(--radius × 1.5) = **12px**（表单字段）；
+   按钮 rounded-3xl = **24px**（默认 h-9 = 36px 高时视觉等同胶囊）；
+   桌面字段高度 min-h-9 = **36px**。
+   统一前实测（探针页 computed）：.sa-input/.sa-select/.sa-textarea/.dest-path-preview/.form-check = 8px 圆角，
+   .form-check 高 40px（其余单行控件 36px）→ 就是用户看到的"圆角/高度不齐"。
+   锚点 .incoming-panel 只加在待整理页的 <section> 上（该类不与其它设置面板共用）；
+   前缀写成 .sa-section.incoming-panel（特异性 0,3,0），因为 .sa-input 等定义在
+   `<style scoped src="settings-shared.css">` 里（编译后 .sa-input[data-v-x] = 0,2,0）。 */
+/* 注意这里**只有**真正的原生/自绘控件；`.sa-select`（naive n-select 根节点）不在列 ——
+   它的圆角/高度由 db-controls.css 的 `--n-border-radius` / `--n-height` 作用在
+   `.n-base-selection` 上，写在根节点上只会多出一层壳。 */
+.sa-section.incoming-panel .sa-input,
+.sa-section.incoming-panel .sa-textarea,
+.sa-section.incoming-panel .form-check,
+.sa-section.incoming-panel .dest-path-preview,
+.sa-section.incoming-panel .track-row {
+  border-radius: 12px;
+}
+/* 单行控件统一 36px 高（.form-check 原本 40px；改为固定高度后纵向内边距归零，靠 align-items 居中） */
+.sa-section.incoming-panel .sa-input,
+.sa-section.incoming-panel .form-check {
+  height: 36px;
+}
+.sa-section.incoming-panel .form-check {
+  padding: 0 12px;
+}
+/* 按钮按 HeroUI 的 rounded-3xl（24px）。36px 高时与原来的 9999px 渲染完全一致，
+   但数值上贴合 HeroUI —— 若日后调整按钮高度，圆角会跟着 24px 走而不是永远"全圆头"。 */
+.sa-section.incoming-panel .sa-btn {
+  border-radius: 24px;
+}
+
+/* ===== AI 设置页：与待整理页同口径（HeroUI field / button 规格） ===== */
+/* 用户要求「AI 设置里的组件全部采用 HeroUI 风格，与待整理页统一」。锚点 .ai-panel 只加在
+   SettingsAiPanel.vue 的根 <section> 上（该类不与其它面板共用）。前缀 .sa-section.ai-panel
+   = 特异性 0,3,0，高于 settings-shared.css 经 `<style scoped src>` 编译出的 .sa-input[data-v-x]（0,2,0）。
+   数值同待整理页：字段 12px 圆角 + `--sa-border` 描边 + --field-shadow 轻投影 + 中性聚焦（不用紫色）。 */
+.sa-section.ai-panel .sa-input {
+  background: var(--sa-elevated);
+  border-color: var(--sa-border);
+  border-radius: 12px;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06);
+}
+.sa-section.ai-panel .sa-input:focus {
+  border-color: color-mix(in srgb, var(--sa-text-primary) 30%, transparent);
+}
+/* 深色下 HeroUI 的 --field-shadow 为 none，照做（否则白底/深色底会出现脏投影） */
+html[data-theme='dark'] .sa-section.ai-panel .sa-input {
+  box-shadow: none;
+}
+/* 选择器同待整理页：白底 + --sa-border + 12px 圆角 + 中性聚焦 + 深色无投影，
+   统一由 db-controls.css 作用在 naive 的 `.n-base-selection` 上，这里不再重复定义。 */
+/* 按钮：圆角按 HeroUI 的 rounded-3xl(24px) */
+.sa-section.ai-panel .sa-btn {
+  border-radius: 24px;
+}
+/* 底部两个按钮统一成「白底灰字」（用户指定）——「保存设置」原本是紫底主按钮，
+   「恢复默认」原本是透明底；现在两者外观一致，主次只靠位置与图标区分。 */
+.sa-section.ai-panel .sa-btn--primary,
+.sa-section.ai-panel .sa-btn--ghost {
+  background: var(--sa-elevated);
+  border-color: var(--sa-border);
+  color: var(--sa-text-secondary);
+  font-weight: 400;
+}
+.sa-section.ai-panel .sa-btn--primary:hover,
+.sa-section.ai-panel .sa-btn--ghost:hover {
+  background: var(--sa-hover);
+  border-color: var(--sa-border);
+  color: var(--sa-text-primary);
+}
+
+/* ===== 基础设置页：与待整理页 / AI 设置页同口径（HeroUI 规格） ===== */
+/* 锚点 .base-panel 只加在 SettingsView.vue 里 `activeSection === 'base'` 的 <section> 上。
+   前缀 .sa-section.base-panel = 0,3,0，高于 settings-shared.css 经 scoped 编译出的 0,2,0。
+   本页控件：.sa-input ×13、原生 .sa-btn ×8、naive <n-button size="small"> ×13、
+   .sa-switch 开关、.storage-stat 数据行；剩下的选项类控件只有「强调色」，走
+   `components/SaSelect.vue`（下拉，自带 scoped 样式，无需在此覆盖）。 */
+.sa-section.base-panel .sa-input {
+  background: var(--sa-elevated);
+  border-color: var(--sa-border);
+  border-radius: 12px;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06);
+}
+.sa-section.base-panel .sa-input:focus {
+  border-color: color-mix(in srgb, var(--sa-text-primary) 30%, transparent);
+}
+html[data-theme='dark'] .sa-section.base-panel .sa-input {
+  box-shadow: none;
+}
+/* 原生按钮：圆角照 HeroUI 的 rounded-3xl；主按钮与 AI 设置页一致改为白底灰字
+   （危险操作 sa-btn--danger 保留红色语义，只统一圆角） */
+.sa-section.base-panel .sa-btn {
+  border-radius: 24px;
+}
+.sa-section.base-panel .sa-btn--primary {
+  background: var(--sa-elevated);
+  border-color: var(--sa-border);
+  color: var(--sa-text-secondary);
+  font-weight: 400;
+}
+.sa-section.base-panel .sa-btn--primary:hover {
+  background: var(--sa-hover);
+  border-color: var(--sa-border);
+  color: var(--sa-text-primary);
+}
+/* 存储与维护卡的数据行（.storage-stat）圆角在本页 scoped 里自带 12px，这里不用再覆盖 */
+/* ===== naive-ui 按钮：统一成 HeroUI 风格的次级按钮 =====
+   naive 把主题变量内联写在按钮元素上（且此处用了 size="small" / quaternary / type="primary"），
+   所以必须用 !important 覆盖；四个状态色一起给，避免 hover/pressed 时跳回 naive 的配色。 */
+.sa-section.base-panel .n-button {
+  --n-height: 36px !important;
+  --n-border-radius: 24px !important;
+  --n-font-size: 13px !important;
+  --n-font-weight: 400 !important;
+  --n-padding: 0 18px !important;
+  --n-color: var(--sa-elevated) !important;
+  --n-color-hover: var(--sa-hover) !important;
+  --n-color-pressed: var(--sa-hover) !important;
+  --n-color-focus: var(--sa-elevated) !important;
+  --n-border: 1px solid var(--sa-border) !important;
+  --n-border-hover: 1px solid var(--sa-border) !important;
+  --n-border-pressed: 1px solid var(--sa-border) !important;
+  --n-border-focus: 1px solid var(--sa-border) !important;
+  --n-text-color: var(--sa-text-secondary) !important;
+  --n-text-color-hover: var(--sa-text-primary) !important;
+  --n-text-color-pressed: var(--sa-text-primary) !important;
+  --n-text-color-focus: var(--sa-text-primary) !important;
+  /* naive 的 ripple / 呼吸动效与侧边重设的其它控件不符，关掉更干净 */
+  --n-ripple-duration: 0s !important;
+  --n-wave-opacity: 0 !important;
+}
+
+/* ===== 基础设置页：卡片标题去强调紫 + 新增「大区」标题 ===== */
+/* 11 个紫色标题互相抢重点 → 卡片标题改深色，强调紫只留给「大区」标题。
+   层级变成：页面 > 大区 > 卡片 > 字段（4 个大区：外观与内容 / 网络与服务 / 存储与维护 / 账号）。
+   注意 .panel-subtitle 的定义在本页 <style scoped> 里（编译后 0,2,0），此处 0,3,0 稳赢。 */
+.sa-section.base-panel .panel-subtitle {
+  color: var(--sa-text-primary);
+}
+.sa-section.base-panel .panel-group-title {
+  margin: 28px 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--sa-accent);
+}
+/* 第一个大区标题紧跟在 .section-head 之后，不要再叠 28px 上边距 */
+.sa-section.base-panel .section-head + .panel-group-title {
+  margin-top: 2px;
+}

@@ -1,0 +1,961 @@
+/* 艺人/组合详情页共享样式：通过 <style scoped src="./entity-detail.css"> 引入。
+   scoped 隔离下两页互不影响。 */
+
+.mv-page {
+  min-height: 100vh;
+  --detail-tint: 109, 92, 224;
+  /* 提纯后的主色：给 PC 整页气氛薄纱 / 头像色环用，JS 抽色完成后覆盖 */
+  --detail-tint-vivid: 110, 92, 224;
+}
+.mv-page :deep(.n-spin-container),
+.mv-page :deep(.n-spin-content) {
+  overflow: visible;
+}
+.mv-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 32px 64px;
+}
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 80px 0;
+  color: var(--sa-text-tertiary);
+}
+.empty-state p {
+  margin: 0;
+  font-size: 14px;
+}
+.empty-back {
+  padding: 6px 18px;
+  border: 1px solid var(--sa-border);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.empty-back:hover {
+  background: var(--sa-hover);
+}
+.empty-tip {
+  margin: 0;
+  padding: 16px 0;
+  color: var(--sa-text-tertiary);
+  font-size: 13px;
+}
+
+/* ===== Hero ===== */
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 40px 0 48px;
+}
+.hero-banner,
+.hero-cover {
+  display: none;
+}
+/* PC Hero 虚化背景层：默认隐藏（手机端维持原有 .hero-cover 铺满大图，不受影响） */
+.hero-bg {
+  display: none;
+}
+.hero-content {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 36px;
+}
+.hero-avatar {
+  width: 200px;
+  height: 200px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 76px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--sa-border);
+  overflow: hidden;
+}
+.hero-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.hero-info {
+  min-width: 0;
+  padding-bottom: 4px;
+}
+.hero-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.hero-name {
+  margin: 0;
+  font-size: 34px;
+  font-weight: 700;
+  color: var(--sa-text-primary);
+  line-height: 1.2;
+}
+.hero-meta {
+  display: none;
+}
+.hero-sub {
+  font-size: 17px;
+  color: var(--sa-text-secondary);
+}
+.hero-mobile {
+  display: none;
+}
+.hero-tags {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sa-accent);
+  background: var(--sa-accent-subtle);
+}
+.hero-group {
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--sa-text-tertiary);
+}
+.hero-group-label {
+  margin-right: 6px;
+}
+.hero-group-name {
+  color: var(--sa-accent);
+  font-weight: 500;
+}
+.hero-group-name--link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--sa-accent);
+  font-weight: 500;
+  cursor: pointer;
+}
+.hero-group-name--link:hover {
+  text-decoration: underline;
+}
+.hero-group-detail {
+  margin-left: 4px;
+}
+.hero-link {
+  text-decoration: none;
+  cursor: pointer;
+}
+.hero-link:hover {
+  text-decoration: underline;
+}
+.hero-sep {
+  color: var(--sa-text-tertiary);
+}
+.hero-stats {
+  margin-top: 26px;
+  display: flex;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+.stat {
+  text-align: left;
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--sa-text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.2;
+}
+.stat-label {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+}
+
+/* ===== Tabs（不跟随滚动，随内容原位） ===== */
+.tabs {
+  background: var(--sa-bg);
+  margin: 32px 0 24px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.tabs-scroll {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow-x: auto;
+  touch-action: pan-x pinch-zoom;
+  scrollbar-width: none;
+}
+.tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+.tab {
+  position: relative;
+  padding: 10px 18px;
+  border: none;
+  background: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sa-text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.2s;
+}
+.tab:hover {
+  color: var(--sa-text-primary);
+}
+.tab--active {
+  color: var(--sa-text-primary);
+}
+.tab--active::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--sa-text-primary);
+}
+
+/* ===== 作品列表加载失败横幅 ===== */
+.load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 10px 16px;
+  border: 1px solid var(--sa-danger, #e5484d);
+  border-radius: 12px;
+  background: rgba(229, 72, 77, 0.08);
+  color: var(--sa-danger, #e5484d);
+  font-size: 13px;
+}
+.load-error-retry {
+  flex-shrink: 0;
+  padding: 4px 16px;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.load-error-retry:hover {
+  filter: brightness(1.2);
+}
+
+/* ===== Overview layout ===== */
+.overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 32px;
+  align-items: start;
+}
+.overview-main {
+  min-width: 0;
+}
+.block {
+  margin-bottom: 40px;
+}
+.block-title {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--sa-text-primary);
+}
+.bio {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--sa-text-secondary);
+  white-space: pre-wrap;
+  /* 默认最多 3 行，超出折叠隐藏；点击展开 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+}
+.bio--expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  -webkit-box-orient: unset;
+  overflow: visible;
+}
+.bio--muted {
+  color: var(--sa-text-tertiary);
+  cursor: default;
+  display: block;
+  -webkit-line-clamp: unset;
+  -webkit-box-orient: unset;
+  overflow: visible;
+}
+
+.card-row {
+  display: flex;
+  gap: 20px;
+  overflow-x: auto;
+  margin: 0 -4px;
+  padding: 0 4px 8px;
+}
+
+/* ===== Timeline ===== */
+.timeline {
+  position: relative;
+  padding-left: 20px;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--sa-border);
+}
+.timeline-item {
+  position: relative;
+  padding: 0 0 20px;
+}
+.timeline-dot {
+  position: absolute;
+  left: -17px;
+  top: 5px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--sa-accent);
+  border: 2px solid var(--sa-elevated);
+}
+.timeline-body {
+  min-width: 0;
+}
+.timeline-title {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sa-text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+.timeline-title:hover {
+  color: var(--sa-accent);
+}
+.timeline-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ===== Sidebar ===== */
+.overview-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  position: sticky;
+  /* 48px 顶栏 + ~48px 吸顶标签栏，原 24px 会被标签栏盖住 */
+  top: 108px;
+}
+.side-card {
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 16px;
+  background: var(--sa-elevated);
+  padding: 20px;
+}
+.side-title {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sa-text-primary);
+}
+.side-grid {
+  display: flex;
+  flex-direction: column;
+}
+.side-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.side-row:last-child {
+  border-bottom: none;
+}
+.side-label {
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+}
+.side-value {
+  font-size: 13px;
+  color: var(--sa-text-primary);
+  line-height: 1.5;
+  word-break: break-word;
+}
+.side-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--sa-accent);
+  cursor: pointer;
+  text-align: left;
+}
+.side-link:hover {
+  text-decoration: underline;
+}
+.side-sep {
+  color: var(--sa-text-tertiary);
+}
+.side-row--mobile {
+  display: none;
+}
+
+/* ===== Video grid ===== */
+.video-section {
+  min-height: 200px;
+}
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--grid-min, 220px), 1fr));
+  gap: 24px;
+}
+.video-grid--portrait {
+  grid-template-columns: repeat(auto-fill, minmax(var(--grid-min-portrait, 140px), 1fr));
+}
+.density-compact { --grid-min: 180px; --grid-min-portrait: 110px; }
+.density-standard { --grid-min: 220px; --grid-min-portrait: 140px; }
+.density-loose { --grid-min: 280px; --grid-min-portrait: 180px; }
+
+/* ===== 平板（≤900px）===== */
+@media (max-width: 900px) {
+  .mv-container {
+    padding: 0 20px 56px;
+  }
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+  .overview-side {
+    position: static;
+  }
+  .hero {
+    padding: 28px 0 24px;
+  }
+  .hero-content {
+    gap: 20px;
+  }
+  .hero-avatar {
+    width: 128px;
+    height: 128px;
+    font-size: 48px;
+    border-radius: 18px;
+  }
+  .hero-name {
+    font-size: 26px;
+  }
+  .hero-sub {
+    font-size: 14px;
+  }
+  .hero-stats {
+    gap: 20px;
+  }
+  .density-compact { --grid-min: 130px; }
+  .density-standard { --grid-min: 160px; }
+  .density-loose { --grid-min: 200px; }
+  .video-grid {
+    --video-card-width: 100%;
+    grid-template-columns: repeat(auto-fill, minmax(var(--grid-min, 160px), 1fr));
+    gap: 16px;
+  }
+}
+
+/* ===== 手机（≤768px）：到边大图 + 图下叠名字/小字；电脑端保持原布局 ===== */
+@media (max-width: 768px) {
+  .mv-page {
+    --cover-wash: color-mix(in srgb, rgb(var(--detail-tint)) 42%, var(--sa-bg));
+    /* 封面文字配色（随主题翻转，不再吃遮罩那一侧的明暗）：
+       深色主题 wash 是暗的 → 偏白字；浅色主题 wash 被 --sa-bg 洗亮，
+       原来的浅色字在浅底上只剩 ~1.5:1（肉眼几乎看不见）→ 必须换深色字。 */
+    --hd-name-color: color-mix(in srgb, rgb(var(--detail-tint)) 28%, #fff);
+    --hd-name-shadow: 0 2px 18px rgba(0, 0, 0, 0.28);
+    --hd-meta-color: color-mix(in srgb, rgb(var(--detail-tint)) 18%, rgba(255, 255, 255, 0.82));
+    background: var(--cover-wash);
+  }
+  /* 浅色主题：遮罩底是亮的 → 名字/副标题行走深色 + 白色光晕 */
+  html[data-theme='light'] .mv-page {
+    --hd-name-color: color-mix(in srgb, rgb(var(--detail-tint)) 36%, #14161a);
+    --hd-name-shadow: 0 1px 16px rgba(255, 255, 255, 0.6);
+    --hd-meta-color: color-mix(in srgb, rgb(var(--detail-tint)) 28%, #14161a);
+  }
+  .mv-container {
+    padding: 0 16px 40px;
+  }
+  .hero {
+    margin: 0 -16px;
+    padding: 0;
+    overflow: hidden;
+  }
+  /* 头像主图：1:1（固定口径，无头像的才回退 1.82:1 横幅） */
+  .hero-cover {
+    display: block;
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    height: auto;
+    max-height: min(92vw, 540px);
+    overflow: hidden;
+  }
+  /* 横幅口径 = 后端裁切 BANNER_RATIO 1.82:1（原 16:9 会把裁好的横幅再切掉约 2.3% 宽） */
+  .hero--banner .hero-cover {
+    aspect-ratio: 1.82 / 1;
+    max-height: none;
+  }
+  .hero-cover-img,
+  .hero-cover-fallback {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 22%;
+    display: block;
+  }
+  .hero--banner .hero-cover-img {
+    object-position: center center;
+  }
+  .hero-cover::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0.1) 0%,
+      transparent 32%,
+      var(--cover-wash) 100%
+    );
+    pointer-events: none;
+  }
+  .hero-cover-text {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 32px;
+    z-index: 1;
+    padding: 0 24px;
+    text-align: center;
+  }
+  .hero--banner .hero-cover-text {
+    bottom: 18px;
+  }
+  /* 手机端大字：与首页轮播刊头同口径（Playfair 衬线栈 + 三档字号）。
+     ⚠ 本地只注册了 Playfair 的 400 / 500 两个字体文件，字重必须留在 500 以内，
+     写 700 会退化成浏览器合成的伪粗体。
+     分档类名由 nameSizeTier() 决定（utils/heroTitle.ts），喂的就是最终渲染的那个名字
+     （2026-09-21 起艺人/组合封面都已是**单一名字**，不再拼「(韩文名)」后缀）。 */
+  .hero-cover-name {
+    --hd-name-base: clamp(32px, 10vw, 44px);
+    --hd-name-xl: clamp(36px, 11vw, 48px);
+    --hd-name-long: clamp(24px, 7vw, 32px);
+    margin: 0;
+    max-width: 100%;
+    /* keep-all：中文/韩文不在字与字之间断行；长英文名（如 ORANGE CARAMEL）
+       只在空格处换行，真遇到单个词都放不下时再交给 overflow-wrap: anywhere 兜底断词 */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+    font-family: 'Playfair Display', 'Iowan Old Style', Palatino, 'Songti SC',
+      'Noto Serif SC', Georgia, serif;
+    font-size: var(--hd-name-base);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    line-height: 1.05;
+    color: var(--hd-name-color);
+    text-shadow: var(--hd-name-shadow);
+  }
+  .hero-cover-name--xl {
+    font-size: var(--hd-name-xl);
+    font-weight: 400;
+    letter-spacing: 0.06em;
+  }
+  .hero-cover-name--long {
+    font-size: var(--hd-name-long);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+  /* 名字是汉字（如中国艺人「宋昕冉」）：汉字字形改用**自托管思源宋体**，
+     顶掉 'Songti SC'/系统衬线的不确定性；拉丁仍由 Playfair Display 接管、
+     韩文仍落系统字体（本栈对这两者不生效）→「其他语言字体不变」。
+     字体声明见 src/styles/font-noto-serif-sc.css：按 unicode-range 切成 ~100 片/字重，
+     拉丁或韩文名字**不会下载任何汉字分片**，汉字名字按需 1~3 片。
+     类名由 View 里的 /[\u3400-\u9fff]/ 判定给出（ArtistDetailView / GroupDetailView）。 */
+  .hero-cover-name--han {
+    font-family: 'Playfair Display', 'Noto Serif SC', 'Iowan Old Style', Palatino,
+      'Songti SC', Georgia, serif;
+  }
+  /* 横幅布局封面是 1.82:1、比头像版矮，三档整体收一档 */
+  .hero--banner .hero-cover-name {
+    --hd-name-base: clamp(26px, 7.5vw, 34px);
+    --hd-name-xl: clamp(28px, 8vw, 36px);
+    --hd-name-long: clamp(20px, 5.5vw, 26px);
+  }
+  .hero-cover-meta {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--hd-meta-color);
+  }
+  .hero-cover-meta span + span::before {
+    content: '·';
+    margin: 0 8px;
+    opacity: 0.7;
+  }
+  .hero-content {
+    display: none;
+  }
+  .hero-pc {
+    display: none !important;
+  }
+  .hero-stats {
+    display: none;
+  }
+  .side-row--mobile {
+    display: flex;
+  }
+  .tabs {
+    background: color-mix(in srgb, var(--cover-wash) 88%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    margin: 4px -16px 18px;
+  }
+  .block {
+    margin-bottom: 28px;
+  }
+  .block-title {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .bio {
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .card-row {
+    --video-card-width: min(168px, 68vw);
+    margin: 0 -16px;
+    padding: 0 16px 6px;
+    gap: 12px;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 16px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .card-row::-webkit-scrollbar {
+    display: none;
+  }
+  .card-row :deep(.video-card) {
+    scroll-snap-align: start;
+  }
+  /* 手机端每个密度都固定列宽（业主 2026-09-22：紧凑档原本 3 列太挤 → 一律 2 列；宽松档保持 1 列大图） */
+  .density-compact { --cols-mobile: 2; }
+  .density-standard { --cols-mobile: 2; }
+  .density-loose { --cols-mobile: 1; }
+  .video-grid {
+    --video-card-width: 100%;
+    grid-template-columns: repeat(var(--cols-mobile, 2), minmax(0, 1fr));
+    gap: 12px 10px;
+  }
+  .side-card {
+    padding: 14px 16px;
+    border-radius: 14px;
+    border-color: color-mix(in srgb, rgb(var(--detail-tint)) 20%, var(--sa-border-subtle));
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, rgb(var(--detail-tint)) 16%, var(--sa-bg)),
+      color-mix(in srgb, rgb(var(--detail-tint)) 7%, var(--sa-bg))
+    );
+  }
+}
+
+/* ===== 组合成员：电脑端保持原 flex；手机端等宽网格 + 超过 12 人折叠 ===== */
+.member-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+.member-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.member-card:hover {
+  transform: translateY(-1px);
+}
+.member-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  overflow: hidden;
+  /* 成员无头像时的统一素色占位（不用组合主色的彩色渐变） */
+  background: linear-gradient(135deg, #c9cfd6, #a6adb6);
+}
+.member-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.member-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sa-text-primary);
+  line-height: 1.3;
+}
+.member-former {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--sa-text-tertiary);
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.member-more {
+  display: none;
+}
+@media (max-width: 768px) {
+  .member-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    gap: 12px 8px;
+    justify-items: center;
+  }
+  .member-grid--collapsed .member-card:nth-child(n + 13) {
+    display: none;
+  }
+  .member-card {
+    width: 100%;
+    max-width: 88px;
+    padding: 4px 0;
+  }
+  .member-card:hover {
+    transform: none;
+  }
+  .member-avatar {
+    width: 56px;
+    height: 56px;
+    font-size: 18px;
+  }
+  .member-name {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .member-more {
+    display: block;
+    margin: 14px auto 0;
+    padding: 6px 16px;
+    border: 1px solid var(--sa-border);
+    border-radius: 9999px;
+    background: transparent;
+    color: var(--sa-text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .member-more:hover {
+    background: var(--sa-hover);
+    color: var(--sa-text-primary);
+  }
+}
+
+
+/* ===== PC 详情气氛（≥769px）：封面铺过顶栏 / Hero / tab，底部收到页面底色。
+       手机端 .hero-bg 仍 display:none，满幅封面不受影响。 ===== */
+@media (min-width: 769px) {
+  .mv-page--atmosphere {
+    position: relative;
+    isolation: isolate;
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, rgb(var(--detail-tint-vivid)) 12%, var(--sa-bg)) 0%,
+      var(--sa-bg) min(72vh, 640px)
+    );
+  }
+  .mv-page--atmosphere .mv-container {
+    position: relative;
+    z-index: 1;
+  }
+  .mv-page--atmosphere .hero-bg {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 100vw;
+    height: min(72vh, 640px);
+    transform: translateX(-50%);
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .mv-page--atmosphere .hero-bg-img,
+  .mv-page--atmosphere .hero-bg-fallback {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 40%;
+    display: block;
+    /* 浅色：轻模糊 + 略提亮，照片可辨，再靠蒙版往白洗 */
+    filter: blur(10px) saturate(1.18) brightness(1.06);
+    transform: scale(1.12);
+    transform-origin: center;
+  }
+  .mv-page--atmosphere .hero-bg-fallback {
+    opacity: 0.45;
+    filter: none;
+    transform: none;
+  }
+  /* ⚠ 顶部两档由 32%/28% 提到 44%/40%（2026-09-22）：浅色主题的顶档太薄，
+     虚化照片的明暗直接透到名字/副标题底下（实测副标题只剩 1.6:1）。
+     加厚后副标题（主文本色）≈5.4:1，照片仍是可辨的水印感；深色主题有独立覆盖，不受影响。 */
+  .mv-page--atmosphere .hero-bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(
+        to bottom,
+        color-mix(in srgb, var(--sa-bg) 44%, transparent) 0%,
+        color-mix(in srgb, var(--sa-bg) 40%, transparent) 36%,
+        color-mix(in srgb, var(--sa-bg) 72%, transparent) 78%,
+        var(--sa-bg) 100%
+      ),
+      linear-gradient(
+        to bottom,
+        color-mix(in srgb, rgb(var(--detail-tint-vivid)) 22%, transparent) 0%,
+        color-mix(in srgb, rgb(var(--detail-tint-vivid)) 12%, transparent) 48%,
+        transparent 76%
+      );
+    pointer-events: none;
+  }
+  html[data-theme='dark'] .mv-page--atmosphere .hero-bg-img {
+    filter: blur(10px) saturate(1.22) brightness(0.72);
+  }
+  html[data-theme='dark'] .mv-page--atmosphere .hero-bg::after {
+    background:
+      linear-gradient(
+        to bottom,
+        color-mix(in srgb, var(--sa-bg) 42%, transparent) 0%,
+        color-mix(in srgb, var(--sa-bg) 38%, transparent) 36%,
+        color-mix(in srgb, var(--sa-bg) 78%, transparent) 78%,
+        var(--sa-bg) 100%
+      ),
+      linear-gradient(
+        to bottom,
+        color-mix(in srgb, rgb(var(--detail-tint-vivid)) 26%, transparent) 0%,
+        color-mix(in srgb, rgb(var(--detail-tint-vivid)) 14%, transparent) 48%,
+        transparent 76%
+      );
+  }
+  .mv-page--atmosphere .tabs {
+    background: transparent;
+  }
+
+  .hero--pc-bg {
+    position: relative;
+    overflow: visible;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 280px;
+    padding: 36px 0;
+  }
+  .hero--pc-bg .hero-content {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    align-items: center;
+    gap: 34px;
+  }
+  .hero--pc-bg .hero-avatar {
+    width: 152px;
+    height: 152px;
+    border-radius: 18px;
+    font-size: 56px;
+    border-color: color-mix(in srgb, rgb(var(--detail-tint-vivid)) 40%, var(--sa-bg));
+    box-shadow:
+      0 18px 44px rgba(0, 0, 0, 0.18),
+      0 0 0 2px color-mix(in srgb, rgb(var(--detail-tint-vivid)) 42%, var(--sa-bg)),
+      0 0 32px color-mix(in srgb, rgb(var(--detail-tint-vivid)) 32%, transparent);
+  }
+  .hero--pc-bg .hero-name {
+    font-size: 40px;
+    letter-spacing: -0.03em;
+    text-shadow: 0 1px 20px color-mix(in srgb, var(--sa-bg) 78%, transparent);
+  }
+  /* 副标题行：与名字同口径给一层「页面底色光晕」——
+     PC hero 的文字压在虚化照片 + 薄纱之上，背景明暗随片源变化，
+     没有光晕时字会被背景拉扯（浅色主题实测仅 2:1）。 */
+  .hero--pc-bg .hero-sub {
+    text-shadow: 0 1px 20px color-mix(in srgb, var(--sa-bg) 78%, transparent);
+  }
+  /* 浅色主题下灰色副标题在「被洗白的照片残影」上只有 1.6:1（实测）→ 直接用主文本色；
+     深色主题不动（那边 wash 是暗的，二级灰本来就够，实测 4:1）。 */
+  html[data-theme='light'] .hero--pc-bg .hero-sub {
+    color: var(--sa-text-primary);
+  }
+  .hero--pc-bg .hero-group {
+    margin-top: 12px;
+  }
+  .hero--pc-bg .hero-stats {
+    margin-top: 22px;
+    gap: 34px;
+  }
+  .hero--pc-bg .stat-num {
+    font-size: 22px;
+  }
+}

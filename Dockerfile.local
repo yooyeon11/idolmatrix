@@ -1,0 +1,70 @@
+# =============================================================
+# 本地测试用构建（Apple Silicon 原生 arm64 加速）。
+# ⚠ 现状：已无实际场景（当前开发机是 Windows / x86），仅作历史保留。
+#
+# 与 Dockerfile 的差异：不装 x86 专有的 VA-API 系统包 —— 仓库内
+# docker/jellyfin 下是 **x86_64** 的 jellyfin-ffmpeg 8.1，在 arm64 容器里
+# 本来也起不来（内核会直接拒绝执行），本地只做 UI 测试、不需要转码。
+# 正式构建仍用 Dockerfile（--platform linux/amd64）。
+# 若确实需要在 arm64 上跑转码，应改用 releases 里的 arm64 产物
+# （jellyfin-ffmpeg8_<ver>-bookworm_arm64.deb），
+# 命令：python scripts/fetch_jellyfin_ffmpeg.py --flavor deb ...（需先扩展 pick_asset 支持 arm64）。
+# =============================================================
+
+FROM node:20-alpine AS frontend-build
+
+WORKDIR /build
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+FROM python:3.11-slim-bookworm AS runtime
+
+# ⚠ 8.1 起 ffmpeg 是 413KB 启动器 + lib/ 下的 libavcodec.so.62 等共享库，
+#   符号链接必须重建（仓库里不存链接），见 Dockerfile 同名段落说明。
+COPY docker/jellyfin/ffmpeg /usr/local/bin/ffmpeg
+COPY docker/jellyfin/ffprobe /usr/local/bin/ffprobe
+COPY docker/jellyfin/vainfo /usr/local/bin/vainfo
+COPY docker/jellyfin/lib /usr/lib/jellyfin-ffmpeg/lib
+COPY docker/jellyfin/share /usr/lib/jellyfin-ffmpeg/share
+
+RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/vainfo; \
+    set -eux; \
+    d="/usr/lib/jellyfin-ffmpeg/lib"; \
+    find "$d" -maxdepth 1 -type f -name '*.so*' -size -1k -delete; \
+    cd "$d"; \
+    for f in *.so.*; do \
+        if [ ! -e "$f" ]; then continue; fi; \
+        if [ -L "$f" ]; then continue; fi; \
+        base="${f%%.so.*}"; \
+        ver="${f#*.so.}"; \
+        acc=""; \
+        for p in $(printf '%s' "$ver" | tr '.' ' '); do \
+            acc="${acc:+$acc.}$p"; \
+            n="$base.so.$acc"; \
+            if [ "$n" != "$f" ]; then ln -sfn "$f" "$n"; fi; \
+        done; \
+        ln -sfn "$f" "$base.so"; \
+    done
+
+# 与 Dockerfile 一致：不写死厂商/驱动名（本文件不装 x86 驱动，仅保持口径统一）
+ENV LD_LIBRARY_PATH=/usr/lib/jellyfin-ffmpeg/lib
+
+WORKDIR /app
+
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+
+COPY backend/ /app/backend/
+COPY --from=frontend-build /build/dist /app/frontend/dist
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app/backend
+EXPOSE 8010
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8010"]

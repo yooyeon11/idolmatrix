@@ -1,0 +1,95 @@
+/* 登录页 / 注册页（首次创建管理员）的共享样式。
+ *
+ * 卡片规格 = HeroUI v3 Card：无描边 + 圆角 24（rounded-3xl）+ padding 16 + gap 12 + 三层浅投影，
+ * 与照片墙帖子卡片同一套；表单内部间距 = HeroUI Form 示例的 gap-4（16px）。
+ * 字号走 HeroUI Typography 档位：h1→h4 档、副标题→body-sm 档、提示→body-xs 档。
+ *
+ * 这两个页面原本各写了一份逐字相同的 scoped style，故抽到此处共用（前缀 auth- 避免污染）。
+ */
+
+.auth-page {
+  /* ⚠ 原来写 min-height: 100% —— 但父链（n-config-provider 那几层壳）没有确定高度，
+     百分比解析不出来，实测页面高度只有内容高（约 440px），卡片贴着页面顶部 24px，
+     而右上角固定的主题切换按钮占 16~50px → 卡片右上角被按钮压住（≤500px 宽时横向也交叠）。
+     改用视口单位自己撑满：100vh 兜底 + 100svh（移动端地址栏不抖动）。 */
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  /* safe：内容比视口还高时退回「贴顶」而不是向上溢出（顶部已留安全区，见下） */
+  align-items: safe center;
+  justify-content: center;
+  background: var(--sa-bg);
+  /* 顶部预留固定定位主题切换按钮的安全区（16 + 按钮 34 + 余量）→ 任何视口都不压到卡片 */
+  padding: 72px 24px 24px;
+}
+/* 手机端 body 已经让出底部导航高度，再按整视口算会多出一条滚动 */
+@media (max-width: 768px) {
+  .auth-page {
+    min-height: calc(100svh - var(--sa-bottom-bar-height));
+  }
+}
+.auth-top {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  /* 固定层本就画在普通块之上，这里显式抬一层，防止以后给卡片加定位/层叠后按钮点不到 */
+  z-index: 10;
+}
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 24px;
+  background: var(--sa-elevated);
+  box-shadow: var(--sa-surface-shadow);
+}
+.auth-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* Typography h4 档：20px / 28px / 600 / tracking-tight */
+.auth-head h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.025em;
+  color: var(--sa-text-primary);
+}
+/* Typography body-sm 档：14px / 24px */
+.auth-head .sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--sa-text-secondary);
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* Typography body-xs 档：12px / 20px */
+.auth-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--sa-text-secondary);
+}
+/* Typography code 档：圆角 6 + default 底 + 等宽（字号跟随 hint 收小） */
+.auth-hint code {
+  display: block;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--sa-default);
+  color: var(--sa-text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}

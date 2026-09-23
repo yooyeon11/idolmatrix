@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>详情页手机端 Hero · 中文字体候选对照（搭 Playfair）</title>
+<style>
+  body {
+    margin: 0;
+    padding: 28px 20px 48px;
+    background: #eef0f4;
+    color: #1f2329;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+  h2 { font-size: 14px; font-weight: 600; margin: 30px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #d8dde5; }
+  h3 { font-size: 13px; font-weight: 600; margin: 22px 0 10px; }
+  .lead { font-size: 13px; line-height: 1.7; color: #5b6470; margin: 0 0 10px; max-width: 1180px; }
+  .lead code, .foot code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; background: #e3e7ee; padding: 0 4px; border-radius: 4px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 390px); gap: 26px 28px; }
+  .cell { width: 390px; }
+  .cap { font-size: 12px; line-height: 1.55; color: #5b6470; margin-bottom: 8px; min-height: 86px; }
+  .cap b { color: #1f2329; font-weight: 600; }
+  .cap .decl { display: block; color: #77818f; }
+  .cap .val { display: block; margin-top: 3px; color: #0c447c; }
+  .cap .bad { color: #a32d2d; }
+  .phone { width: 390px; height: 620px; border: 1px solid #c9cfd6; border-radius: 14px; overflow: hidden; background: #fff; }
+  .phone iframe { width: 390px; height: 620px; border: 0; display: block; }
+  table { border-collapse: collapse; font-size: 12px; margin: 6px 0 4px; }
+  th, td { border: 1px solid #d8dde5; padding: 6px 9px; text-align: left; vertical-align: top; line-height: 1.55; }
+  th { background: #e3e7ee; font-weight: 600; white-space: nowrap; }
+  td.n { white-space: nowrap; }
+  .foot { font-size: 12px; line-height: 1.8; color: #77818f; margin-top: 26px; max-width: 1180px; }
+  .foot b { color: #1f2329; }
+</style>
+</head>
+<body>
+
+<h1>详情页手机端 Hero 名字 · 中文字体候选（与 Playfair Display 搭配）</h1>
+<p class="lead">
+  只比「中文/日韩字形」这一件事：每一格都用 <code>variant=impl</code> 走**线上真实的 CSS 类名与分档**
+  （<code>hero-cover-name--xl/long</code>），只把 <code>font-family</code> 里的**汉字字族**换掉；
+  Playfair Display 仍排在第一位，拉丁字母/数字依旧走 Playfair，汉字落到候选字族。
+  iframe 宽 390px 命中 <code>max-width:768px</code> 断点，封面与底板抽色都用真实素材与真实算法。
+</p>
+<p class="lead">
+  候选字体全部从 CDN 现拉（<code>unicode-range</code> 切片包），**放进正式库要自托管**；授权与体积见文末表格。
+</p>
+
+<h2>一、同一文案「裴珠泫 (배주현)」：现状 vs 四个候选</h2>
+<div class="grid" id="grid1"></div>
+
+<h2>二、其余真实名字：看混排（拉丁 + 汉字 + 韩文）表现</h2>
+<h3>候选 1B · 思源宋体 + 韩文宋体（成套，重点看括号里的韩文）</h3>
+<div class="grid" id="grid4"></div>
+<h3>候选 1 · 思源宋体（只换汉字，韩文留系统字体）</h3>
+<div class="grid" id="grid2"></div>
+<h3>候选 2 · 霞鹜文楷（只换汉字，韩文留系统字体）</h3>
+<div class="grid" id="grid3"></div>
+
+<h2>三、授权与体积（本页实测值）</h2>
+<table>
+  <tr>
+    <th>候选</th><th>授权</th><th>webfont 形态</th><th>单次加载量（粗测）</th><th>与 Playfair 的搭配理由</th>
+  </tr>
+  <tr>
+    <td class="n"><b>思源宋体</b><br>Noto Serif SC</td>
+    <td>SIL OFL 1.1<br>（可商用、可嵌入、不要求署名）</td>
+    <td>Google 官方切片镜像 <code>noto-serif-sc@31</code>：约 100 片/字重，带 <code>unicode-range</code></td>
+    <td>按需 1–3 片<br>（单片约 5–50KB）</td>
+    <td>竖笔重、横笔轻的高对比明朝体，与 Playfair 的「粗细反差 + 尖角衬线」同一套视觉语言；杂志刊头最正统的搭配</td>
+  </tr>
+  <tr>
+    <td class="n"><b>霞鹜文楷</b><br>LXGW WenKai</td>
+    <td>SIL OFL 1.1<br>（可商用；衍生物须沿用 OFL）</td>
+    <td>官方 webfont 包：97 片/字重，带 <code>unicode-range</code></td>
+    <td>按需 1–2 片<br>（含名字那片实测 53KB）</td>
+    <td>楷体骨架、笔画圆润、对比度低；配上 Playfair 会形成「硬衬线 + 软笔意」的对照，偏文艺/温柔，不如宋体「同一语言」</td>
+  </tr>
+  <tr>
+    <td class="n"><b>霞鹜文楷 Screen</b></td>
+    <td>SIL OFL 1.1</td>
+    <td>同上（屏幕优化版：笔画略加粗、末端更方）</td>
+    <td>同文楷</td>
+    <td>本质是文楷的「小字更清楚」版本，大字气质与文楷一致；如果同时要用在 UI 文本上才值得选它</td>
+  </tr>
+  <tr>
+    <td class="n"><b>霞鹜新致宋</b><br>LXGW Neo ZhiSong</td>
+    <td>包内声明 SIL OFL 1.1<br>（底字为 IPAmj明朝，作者另有 IPA 授权说明，<b>建议落地前再确认一次</b>）</td>
+    <td>单个 woff2，<b>4.24MB 无切片</b></td>
+    <td>一次 4.24MB<br>（移动端不友好）</td>
+    <td>明朝体里笔画最「瘦硬」的一支，横竖对比比思源宋体更极端，刊头气势最强；代价是体积</td>
+  </tr>
+  <tr>
+    <td class="n"><b>思源宋体韩文</b><br>Noto Serif KR<br>（常与思源宋体成套用）</td>
+    <td>SIL OFL 1.1</td>
+    <td>Google 官方切片镜像 <code>noto-serif-kr@27</code>：约 124 片/字重</td>
+    <td>按需 1–2 片</td>
+    <td>本库名字大量形如「汉字名 (韩文名)」，只换汉字会让韩文留在系统黑体上（实测现状用 Malgun Gothic 渲染「배주현」，与明朝骨架明显不搭）。加它才能让混排真正成套</td>
+  </tr>
+  <tr>
+    <td class="n"><b>现状</b>（未换）</td>
+    <td>—</td>
+    <td>—</td>
+    <td>0</td>
+    <td>汉字走的是**系统衬线**：Windows 上是宋体（SimSun），macOS/iOS 上是宋体-简（Songti SC），Android 上多半没有衬线 → 掉到黑体。三端不一致，且宋体在 43px 下笔画偏细、边缘发虚</td>
+  </tr>
+</table>
+
+<p class="foot">
+  <b>三个必须知道的事实（都已在本页实测）：</b><br>
+  1. <b>单换汉字不够</b>：候选 webfont 都不含完整韩文 —— 思源宋体 SC 与霞鹜文楷的 <code>unicode-range</code> 里只有 <code>U+AC00–AC01</code> 等零星码位，
+  没有整块谚文（<code>U+AC00–D7A3</code>）→「(배주현)(희진)」这类韩文会回退到系统字体（本机实测是 <b>Malgun Gothic</b>，一款黑体，
+  和汉字的明朝骨架明显不搭）。所以推荐把 <b>候选 1B（思源宋体 + Noto Serif KR）</b> 作为正解；只上候选 1 的话，韩文仍是老样子。<br>
+  2. <b>Playfair 的位置不能动</b>：它必须排在第一位，否则拉丁字母会被汉字字族的拉丁字形接管（思源宋体的拉丁是另一种味道，会抢掉刊头气质）。<br>
+  3. <b>分档类名照旧生效</b>：本页每格都带真实的 <code>hero-cover-name--xl/long</code>，换字体不影响 <code>nameSizeTier()</code> 的分档结果。
+</p>
+
+<script>
+const CANDIDATES = [
+  { cjk: '',               label: '现状',                decl: 'Playfair 栈原样：汉字走系统衬线（Windows 有思源宋体就宋体、没有就 SimSun；iOS=Songti SC；Android 多为黑体）' },
+  { cjk: 'han',            label: '候选 1 · 思源宋体',     decl: "'Playfair Display', 'Noto Serif SC', 'Iowan Old Style', …" },
+  { cjk: 'han-kr',         label: '候选 1B · 思源宋体 + 韩文宋体', decl: "'Playfair Display', 'Noto Serif SC', 'Noto Serif KR', …（汉字与韩文成套，混排最协调）" },
+  { cjk: 'wenkai',         label: '候选 2 · 霞鹜文楷',     decl: "'Playfair Display', 'LXGW WenKai', 'Iowan Old Style', …" },
+  { cjk: 'wenkai-screen',  label: '候选 3 · 霞鹜文楷 Screen', decl: "'Playfair Display', 'LXGW WenKai Screen', …" },
+  { cjk: 'zhisong',        label: '候选 4 · 霞鹜新致宋',   decl: "'Playfair Display', 'LXGW Neo ZhiSong', …（4.24MB 整包）" },
+]
+
+const NAME_DEFAULT = '裴珠泫 (배주현)'
+// 第 2/3 节用真实数据里的几种名字形态：汉字名 / 汉字+韩文 / 纯汉字组合名 / 纯韩文（看韩文是否跟着换）
+const MIXED = ['裴珠泫 (배주현)', '田姬振 (희진)', '本月少女', '김채원']
+
+function build(container, cells) {
+  for (const c of cells) {
+    const cell = document.createElement('div')
+    cell.className = 'cell'
+    const cap = document.createElement('div')
+    cap.className = 'cap'
+    cap.innerHTML =
+      `<b>${c.label}</b><span class="decl">${c.decl}</span>` +
+      `<span class="val" data-k="m">实测：读取中…</span>` +
+      `<span class="val" data-k="c">字体族：读取中…</span>`
+    const phone = document.createElement('div')
+    phone.className = 'phone'
+    const iframe = document.createElement('iframe')
+    const q = new URLSearchParams({ v: 'impl' })
+    q.set('name', c.name || NAME_DEFAULT)
+    if (c.cjk) q.set('cjk', c.cjk)
+    iframe.src = 'hero.html?' + q.toString()
+    iframe.title = c.label
+    phone.appendChild(iframe)
+    cell.appendChild(cap)
+    cell.appendChild(phone)
+    container.appendChild(cell)
+
+    const fill = (incoming) => {
+      // ⚠ file:// 下每个 iframe 都是不透明源，读 iframe.contentWindow.__measured 会抛 SecurityError；
+      //   主路径是子页 postMessage 喂进来的 incoming，本地直读只作为兜底并吞掉异常
+      let m = incoming
+      if (!m) {
+        try { m = iframe.contentWindow && iframe.contentWindow.__measured } catch (e) { m = null }
+      }
+      if (!m) return false
+      // 留一份原始数据，便于排障时直接看「字体到底加载了没有」
+      window.__raw = window.__raw || {}
+      window.__raw[c.label] = m
+      const fam = m.familyDeclared.split(',')[0].replace(/['"]/g, '')
+      cap.querySelector('[data-k=m]').textContent =
+        `实测：分档 ${m.tier || '-'} · ${m.fontWeight} · ${parseFloat(m.fontSize).toFixed(2)}px · ` +
+        `${m.lsEm.toFixed(3)}em · ${m.noOverflow ? '无横向溢出' : '⚠ 横向溢出'}`
+      cap.querySelector('[data-k=c]').innerHTML =
+        `首族声明 ${fam}；` +
+        (m.cjk
+          ? (!/[\u3400-\u9fff]/.test(m.name)
+              ? '名字里没有汉字 → 不触发汉字字族（正常，Playfair/系统字体接管）'
+              : (m.cjkApplied
+                  ? `候选字族已生效（check 通过 · 已加载分片 ${m.cjkLoadedSlices} 片）`
+                  : '<span class="bad">候选字族未生效（仍是回退字形）</span>'))
+          : '无候选（走系统衬线）')
+      return true
+    }
+    iframe.__fill = fill
+    window.addEventListener('message', (e) => {
+      if (e.source !== iframe.contentWindow) return
+      if (e.data && e.data.type === 'hero-measured') fill(e.data.data)
+    })
+    iframe.addEventListener('load', () => {
+      let tries = 0
+      const t = setInterval(() => {
+        if (fill() || ++tries > 300) clearInterval(t)
+      }, 100)
+    })
+  }
+}
+
+build(document.getElementById('grid1'), CANDIDATES)
+build(document.getElementById('grid4'), ['裴珠泫 (배주현)', '田姬振 (희진)', '김채원'].map((n) => ({ cjk: 'han-kr', name: n, label: '成套 · ' + n, decl: '汉字 → Noto Serif SC，韩文 → Noto Serif KR' })))
+build(document.getElementById('grid2'), MIXED.map((n) => ({ cjk: 'han', name: n, label: '思源宋体 · ' + n, decl: '真实分档类名 + 换汉字字族；韩文仍走系统字体' })))
+build(document.getElementById('grid3'), MIXED.map((n) => ({ cjk: 'wenkai', name: n, label: '霞鹜文楷 · ' + n, decl: '真实分档类名 + 换汉字字族；韩文仍走系统字体' })))
+
+window.__cells = () => [...document.querySelectorAll('.cell')].map((c) => ({
+  label: c.querySelector('b').textContent,
+  measured: [...c.querySelectorAll('.val')].map((v) => v.textContent.trim()).join(' | '),
+}))
+window.__overflowFree = () => document.documentElement.scrollWidth <= window.innerWidth
+setTimeout(() => { document.title = 'H=' + document.body.scrollHeight }, 6000)
+</script>
+</body>
+</html>

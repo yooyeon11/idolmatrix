@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 建库向导 — 示意图</title>
+<style>
+  :root {
+    --app-bg: #f5f7fa;
+    --app-text: #1f2329;
+    --app-card-bg: #ffffff;
+    --app-border: #e8ebf0;
+    --app-text-secondary: #5b6470;
+    --app-text-tertiary: #77818f;
+    --sa-accent: #6d5ce0;
+    --sa-accent-hover: #5a4ad6;
+    --sa-accent-subtle: rgba(109, 92, 224, 0.1);
+    --sa-accent-border: rgba(109, 92, 224, 0.35);
+    --ok: #18a058;
+    --ok-subtle: rgba(24, 160, 88, 0.1);
+    --warn: #d97706;
+    --warn-subtle: rgba(217, 119, 6, 0.1);
+    --conflict: #d03050;
+    --conflict-subtle: rgba(208, 48, 80, 0.08);
+    --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 16px rgba(15, 23, 42, 0.05);
+  }
+  html[data-theme='dark'] {
+    --app-bg: #0e0e12;
+    --app-text: #ececf1;
+    --app-card-bg: #15151b;
+    --app-border: rgba(255, 255, 255, 0.1);
+    --app-text-secondary: #9898a8;
+    --app-text-tertiary: #7d7d8e;
+    --sa-accent: #8b7cf0;
+    --sa-accent-subtle: rgba(139, 124, 240, 0.12);
+    --sa-accent-border: rgba(139, 124, 240, 0.35);
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: 'Lato', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--app-bg); color: var(--app-text);
+    min-height: 100vh;
+  }
+  .toolbar {
+    position: fixed; top: 16px; right: 16px; z-index: 99;
+    display: flex; gap: 8px;
+  }
+  .toolbar button {
+    border: 1px solid var(--app-border); background: var(--app-card-bg);
+    color: var(--app-text-secondary); border-radius: 8px; padding: 6px 14px;
+    font-size: 12px; cursor: pointer;
+  }
+  .mock-note {
+    text-align: center; padding: 10px; font-size: 12px;
+    color: var(--app-text-tertiary); border-bottom: 1px dashed var(--app-border);
+  }
+  .page { max-width: 1080px; margin: 0 auto; padding: 28px 32px 64px; }
+
+  /* ===== 步骤条 ===== */
+  .stepper { display: flex; align-items: center; gap: 0; margin: 8px 0 28px; }
+  .step { display: flex; align-items: center; gap: 10px; color: var(--app-text-tertiary); }
+  .step .dot {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+    border: 2px solid var(--app-border); background: var(--app-card-bg); color: var(--app-text-tertiary);
+  }
+  .step.active { color: var(--app-text); }
+  .step.active .dot { border-color: var(--sa-accent); background: var(--sa-accent); color: #fff; }
+  .step.done .dot { border-color: var(--ok); background: var(--ok-subtle); color: var(--ok); }
+  .step .label { font-size: 14px; font-weight: 600; }
+  .step .sub { font-size: 11px; color: var(--app-text-tertiary); display: block; margin-top: 1px; }
+  .step-line { flex: 1; height: 2px; background: var(--app-border); margin: 0 16px; }
+  .step-line.done { background: var(--ok); }
+
+  /* ===== 通用 ===== */
+  .card {
+    background: var(--app-card-bg); border: 1px solid var(--app-border);
+    border-radius: 14px; box-shadow: var(--shadow); padding: 24px;
+  }
+  .card + .card { margin-top: 16px; }
+  .card h3 { margin: 0 0 4px; font-size: 15px; }
+  .card .desc { font-size: 13px; color: var(--app-text-secondary); margin: 0 0 16px; }
+  .btn {
+    border: none; border-radius: 9px; padding: 9px 22px; font-size: 14px;
+    font-weight: 600; cursor: pointer;
+  }
+  .btn-primary { background: var(--sa-accent); color: #fff; }
+  .btn-primary:hover { background: var(--sa-accent-hover); }
+  .btn-ghost {
+    background: transparent; color: var(--app-text-secondary);
+    border: 1px solid var(--app-border);
+  }
+  .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+  .foot { display: flex; justify-content: space-between; margin-top: 24px; align-items: center; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; font-weight: 600; border-radius: 6px; padding: 2px 8px;
+  }
+  .b-wikidata { background: rgba(0, 102, 51, 0.12); color: #006633; }
+  .b-wikipedia { background: rgba(51, 102, 204, 0.12); color: #3366cc; }
+  .b-fandom { background: rgba(255, 90, 0, 0.12); color: #e05a00; }
+  .b-ai { background: var(--sa-accent-subtle); color: var(--sa-accent); }
+  html[data-theme='dark'] .b-wikidata { color: #6fcf97; }
+  html[data-theme='dark'] .b-wikipedia { color: #7ea4f5; }
+  html[data-theme='dark'] .b-fandom { color: #ff9a5c; }
+  .b-new { background: var(--sa-accent-subtle); color: var(--sa-accent); }
+  .b-exist { background: var(--ok-subtle); color: var(--ok); }
+  .b-conflict { background: var(--conflict-subtle); color: var(--conflict); }
+  .lock { font-size: 11px; color: var(--app-text-tertiary); }
+  input[type="text"], textarea {
+    width: 100%; border: 1px solid var(--app-border); border-radius: 9px;
+    background: var(--app-bg); color: var(--app-text);
+    padding: 10px 14px; font-size: 14px; font-family: inherit; outline: none;
+  }
+  input[type="text"]:focus { border-color: var(--sa-accent-border); }
+  input[type="checkbox"] { accent-color: var(--sa-accent); width: 15px; height: 15px; }
+
+  /* ===== 步骤 1 ===== */
+  .entry-row { display: flex; gap: 10px; margin-bottom: 12px; }
+  .entry-row input { flex: 1; }
+  .candidate { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--app-border); border-radius: 10px; margin-top: 10px; cursor: pointer; }
+  .candidate:hover { border-color: var(--sa-accent-border); background: var(--sa-accent-subtle); }
+  .candidate.picked { border-color: var(--sa-accent); background: var(--sa-accent-subtle); }
+  .candidate .c-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+  .candidate .c-url { font-size: 12px; color: var(--app-text-tertiary); }
+  .candidate .c-desc { font-size: 12px; color: var(--app-text-secondary); margin-top: 5px; }
+  .c-badges { display: flex; gap: 6px; margin-top: 6px; }
+  .detected { display: flex; align-items: center; gap: 10px; background: var(--ok-subtle); border: 1px solid rgba(24,160,88,.25); border-radius: 10px; padding: 12px 16px; margin-bottom: 18px; }
+  .detected .d-name { font-weight: 700; font-size: 15px; }
+  .detected .d-sub { font-size: 12px; color: var(--app-text-secondary); }
+
+  /* ===== 步骤 2 ===== */
+  .draft-grid { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
+  .center-node {
+    text-align: center; padding: 22px 16px; border: 2px solid var(--sa-accent);
+    border-radius: 14px; background: var(--sa-accent-subtle);
+  }
+  .center-node .g-avatar {
+    width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 10px;
+    background: linear-gradient(135deg, #8b7cf0, #d06ce0); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 800;
+  }
+  .center-node .g-name { font-size: 17px; font-weight: 800; }
+  .center-node .g-meta { font-size: 12px; color: var(--app-text-secondary); margin-top: 4px; line-height: 1.7; }
+  .mini-stats { display: flex; justify-content: center; gap: 14px; margin-top: 12px; }
+  .mini-stats .ms { text-align: center; }
+  .mini-stats .ms b { display: block; font-size: 17px; }
+  .mini-stats .ms span { font-size: 11px; color: var(--app-text-tertiary); }
+  .spokes { display: flex; flex-direction: column; gap: 12px; }
+  .spoke { border: 1px solid var(--app-border); border-radius: 12px; overflow: hidden; }
+  .spoke-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 16px; background: var(--app-bg); }
+  .spoke-head .t { font-size: 13px; font-weight: 700; }
+  .spoke-head .n { font-size: 12px; color: var(--app-text-tertiary); }
+  table.draft { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.draft td { padding: 9px 16px; border-top: 1px solid var(--app-border); vertical-align: middle; }
+  table.draft tr:hover td { background: var(--sa-accent-subtle); }
+  .cell-main { font-weight: 600; }
+  .cell-sub { font-size: 11px; color: var(--app-text-tertiary); margin-top: 2px; }
+  .conflict-box {
+    margin-top: 16px; border: 1px solid rgba(208,48,80,.3); background: var(--conflict-subtle);
+    border-radius: 12px; padding: 14px 16px;
+  }
+  .conflict-box .cb-title { font-size: 13px; font-weight: 700; color: var(--conflict); margin-bottom: 8px; }
+  .conflict-row { display: flex; gap: 10px; align-items: flex-start; font-size: 12.5px; padding: 4px 0; }
+  .choice { border: 1px solid var(--app-border); border-radius: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px; background: var(--app-card-bg); }
+  .choice.sel { border-color: var(--sa-accent); color: var(--sa-accent); font-weight: 700; background: var(--sa-accent-subtle); }
+
+  /* ===== 步骤 3 ===== */
+  .sum-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+  .sum-cell { border: 1px solid var(--app-border); border-radius: 12px; padding: 14px 16px; }
+  .sum-cell b { display: block; font-size: 22px; }
+  .sum-cell span { font-size: 12px; color: var(--app-text-secondary); }
+  .sum-cell em { font-style: normal; font-size: 11px; display: block; margin-top: 4px; }
+  .em-new { color: var(--sa-accent); }
+  .em-exist { color: var(--ok); }
+  .match-row { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--app-border); font-size: 13px; }
+  .arrow { color: var(--app-text-tertiary); }
+  .progress-wrap { margin-top: 18px; }
+  .progress-bar { height: 8px; border-radius: 4px; background: var(--app-border); overflow: hidden; }
+  .progress-fill { height: 100%; width: 100%; background: linear-gradient(90deg, var(--sa-accent), #a855f7); border-radius: 4px; }
+  .progress-text { display: flex; justify-content: space-between; font-size: 12px; color: var(--app-text-secondary); margin-top: 8px; }
+  .done-banner {
+    display: flex; align-items: center; gap: 12px; margin-top: 16px;
+    background: var(--ok-subtle); border: 1px solid rgba(24,160,88,.3); border-radius: 12px; padding: 14px 18px;
+  }
+  .done-banner .ic { font-size: 22px; }
+  .screen { display: none; }
+  .screen.visible { display: block; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="setTheme('light')">☀️ 浅色</button>
+  <button onclick="setTheme('dark')">🌙 深色</button>
+</div>
+<div class="mock-note">示意图 · AI 建库向导（示例数据：tripleS）· 点击底部按钮或步骤条切换三步</div>
+
+<div class="page">
+
+  <!-- 步骤条 -->
+  <div class="stepper">
+    <div class="step active" id="stp1" onclick="go(1)"><div class="dot">1</div><div><span class="label">选择来源</span><span class="sub">贴链接，AI 识别实体</span></div></div>
+    <div class="step-line" id="sl1"></div>
+    <div class="step" id="stp2" onclick="go(2)"><div class="dot">2</div><div><span class="label">审阅草案网</span><span class="sub">成员 · 公司 · 专辑</span></div></div>
+    <div class="step-line" id="sl2"></div>
+    <div class="step" id="stp3" onclick="go(3)"><div class="dot">3</div><div><span class="label">查重并入库</span><span class="sub">已有实体自动挂接</span></div></div>
+  </div>
+
+  <!-- ============ 第 1 步 ============ -->
+  <div class="screen visible" id="screen1">
+    <div class="card">
+      <h3>从哪里开始？</h3>
+      <p class="desc">输入组合名让 AI 搜索候选条目，或直接粘贴你信任的网页链接（可多个）。确定性的结构化数据将直接来自这些页面，AI 只做汇编与仲裁。</p>
+      <div class="entry-row">
+        <input type="text" value="tripleS" readonly>
+        <button class="btn btn-primary" style="white-space:nowrap">🔍 搜索候选条目</button>
+      </div>
+      <div class="entry-row">
+        <input type="text" value="https://kpop.fandom.com/wiki/tripleS" readonly>
+        <button class="btn btn-ghost" style="white-space:nowrap">＋ 添加链接</button>
+      </div>
+
+      <div class="detected">
+        <span style="font-size:20px">✅</span>
+        <div>
+          <div class="d-name">识别为：组合（Girl Group）— tripleS</div>
+          <div class="d-sub">已选中 2 个来源 · Wikidata Q114618583 · kpop.fandom.com · 预计抓取：成员名单、进出时间、公司、专辑列表</div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:6px">候选条目</h3>
+      <div class="candidate picked">
+        <input type="checkbox" checked>
+        <div>
+          <div class="c-title">tripleS（트리플에스）</div>
+          <div class="c-url">kpop.fandom.com/wiki/tripleS</div>
+          <div class="c-desc">24 人韩国女子组合，MODHAUS 旗下 2022 年出道，含 Acid Angel from Kyoto、EVOLution 等小分队。</div>
+          <div class="c-badges"><span class="badge b-fandom">K-pop Fandom</span><span class="badge">匹配度 98%</span></div>
+        </div>
+      </div>
+      <div class="candidate picked">
+        <input type="checkbox" checked>
+        <div>
+          <div class="c-title">tripleS</div>
+          <div class="c-url">zh.wikipedia.org/wiki/tripleS · wikidata.org/wiki/Q114618583</div>
+          <div class="c-desc">维基数据条目含 P527 成员限定符（P580/P582 加入与退出日期）、P571 成立日期。</div>
+          <div class="c-badges"><span class="badge b-wikipedia">Wikipedia</span><span class="badge b-wikidata">Wikidata</span><span class="badge">匹配度 96%</span></div>
+        </div>
+      </div>
+      <div class="candidate">
+        <input type="checkbox">
+        <div>
+          <div class="c-title">tripleS (song)</div>
+          <div class="c-url">en.wikipedia.org/wiki/TripleS_(song)</div>
+          <div class="c-desc">同名歌曲条目 —— 与目标实体类型不符，默认不选。</div>
+          <div class="c-badges"><span class="badge b-wikipedia">Wikipedia</span><span class="badge" style="background:var(--warn-subtle);color:var(--warn)">类型不符</span></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span style="font-size:12px;color:var(--app-text-tertiary)">🔒 确认入库后，AI 写入的字段默认上锁，你手动修改过的字段不会被将来的 AI 补全覆盖</span>
+        <button class="btn btn-primary" onclick="go(2)">抓取并生成草案 →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 第 2 步 ============ -->
+  <div class="screen" id="screen2">
+    <div class="draft-grid">
+      <!-- 左：中心实体 -->
+      <div>
+        <div class="card">
+          <div class="center-node">
+            <div class="g-avatar">tS</div>
+            <div class="g-name">tripleS</div>
+            <div class="g-meta">
+              트리플에스 · 女子组合 · 韩国<br>
+              出道：2022-10-13（AI 仲裁自 2 个来源）<br>
+              小分队：Acid Angel from Kyoto 等 4 组
+            </div>
+            <div class="mini-stats">
+              <div class="ms"><b>24</b><span>成员</span></div>
+              <div class="ms"><b>2</b><span>公司关系</span></div>
+              <div class="ms"><b>9</b><span>专辑</span></div>
+              <div class="ms"><b>71</b><span>歌曲</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="conflict-box">
+          <div class="cb-title">⚠ 多来源冲突，需要你仲裁（2 处）</div>
+          <div class="conflict-row">
+            <span class="badge b-conflict">出道日</span>
+            <div style="flex:1">
+              <div class="choice sel">2022-10-13（Fandom / 正式出道日）</div>
+              <div style="height:6px"></div>
+              <div class="choice">2023-02-13（维基 / 首张专辑发行日）</div>
+            </div>
+          </div>
+          <div class="conflict-row">
+            <span class="badge b-conflict">成员</span>
+            <div style="flex:1">
+              「서연 / SeoYeon / 定妍」识别为同一人（别名合并）？
+              <div style="height:6px"></div>
+              <div class="choice sel">合并为一人，别名：SeoYeon、서연</div>
+              <div style="height:6px"></div>
+              <div class="choice">视为不同人</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右：草案明细 -->
+      <div class="spokes">
+        <div class="spoke">
+          <div class="spoke-head"><span class="t">👥 成员与变化轨迹</span><span class="n">24 人 · 1 段退出记录 · 全部勾选</span></div>
+          <table class="draft">
+            <tr><td style="width:30px"><input type="checkbox" checked></td><td><div class="cell-main">Yoon SeoYeon 윤서연</div><div class="cell-sub">2003-04-29 · 位置待定</div></td><td>2022-07 → 至今 <span class="lock">🔒</span></td><td><span class="badge b-new">新建</span></td></tr>
+            <tr><td><input type="checkbox" checked></td><td><div class="cell-main">Jeong HyeRin 정혜린</div><div class="cell-sub">2003-04-14</div></td><td>2022-07 → 至今 <span class="lock">🔒</span></td><td><span class="badge b-new">新建</span></td></tr>
+            <tr><td><input type="checkbox" checked></td><td><div class="cell-main">Lee JiWoo 이지우</div><div class="cell-sub">2005-07-27</div></td><td>2022-08 → 至今 <span class="lock">🔒</span></td><td><span class="badge b-new">新建</span></td></tr>
+            <tr><td><input type="checkbox" checked></td><td><div class="cell-main">김유연 Kim YuYeon</div><div class="cell-sub">2005-06-02 · 前成员 1 段</div></td><td>2022-08 → <span style="color:var(--warn)">2024-05 退出</span> <span class="lock">🔒</span></td><td><span class="badge b-new">新建</span></td></tr>
+            <tr><td></td><td colspan="3" style="font-size:12px;color:var(--app-text-tertiary)">… 另有 20 名成员，点击展开</td></tr>
+          </table>
+        </div>
+
+        <div class="spoke">
+          <div class="spoke-head"><span class="t">🏢 公司关系（含变化）</span><span class="n">2 段记录</span></div>
+          <table class="draft">
+            <tr><td style="width:30px"><input type="checkbox" checked></td><td><div class="cell-main">MODHAUS</div><div class="cell-sub">厂牌 · 韩国首尔</div></td><td>2022 → 至今 <span class="lock">🔒</span></td><td><span class="badge b-exist">库内已有 → 挂接</span></td></tr>
+            <tr><td><input type="checkbox" checked></td><td><div class="cell-main">Kakao Entertainment</div><div class="cell-sub">发行分发</div></td><td>2023 → 至今 <span class="lock">🔒</span></td><td><span class="badge b-exist">库内已有 → 挂接</span></td></tr>
+          </table>
+        </div>
+
+        <div class="spoke">
+          <div class="spoke-head"><span class="t">💿 专辑与歌曲</span><span class="n">9 张专辑 · 71 首歌 · 可逐张展开审阅</span></div>
+          <table class="draft">
+            <tr><td style="width:30px"><input type="checkbox" checked></td><td><div class="cell-main">ASSEMBLE</div><div class="cell-sub">Mini Album · 2023-02-13 · 7 曲</div></td><td>—</td><td><span class="badge b-new">新建</span></td></tr>
+            <tr><td><input type="checkbox" checked></td><td><div class="cell-main">ASSEMBLE24</div><div class="cell-sub">Full Album · 2024-05-08 · 24 曲（主打「Girls Never Die」）</div></td><td>—</td><td><span class="badge b-new">新建</span></td></tr>
+            <tr><td><input type="checkbox" checked></td><td><div class="cell-main">Generation</div><div class="cell-sub">Single · 2022-10-13 · 1 曲</div></td><td>—</td><td><span class="badge b-new">新建</span></td></tr>
+            <tr><td></td><td colspan="3" style="font-size:12px;color:var(--app-text-tertiary)">… 另有 6 张专辑，勾选后其曲目将一并生成 Song 与 AlbumTrack</td></tr>
+          </table>
+        </div>
+
+        <div class="foot">
+          <button class="btn btn-ghost" onclick="go(1)">← 上一步</button>
+          <span style="font-size:12px;color:var(--app-text-tertiary)">已勾选：24 成员 · 2 公司关系 · 9 专辑 · 71 歌曲</span>
+          <button class="btn btn-primary" onclick="go(3)">下一步：查重入库 →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 第 3 步 ============ -->
+  <div class="screen" id="screen3">
+    <div class="card">
+      <h3>入库前汇总</h3>
+      <p class="desc">系统已用模糊匹配（name_match）将草案与现有库做了查重：能对上的实体只挂接不重建，其余新建。所有写入都会记录来源链接到 external_links。</p>
+      <div class="sum-grid">
+        <div class="sum-cell"><b>25</b><span>新建实体</span><em class="em-new">24 成员 + 9 专辑 + …</em></div>
+        <div class="sum-cell"><b>2</b><span>挂接已有实体</span><em class="em-exist">MODHAUS、Kakao Ent.</em></div>
+        <div class="sum-cell"><b>33</b><span>新建关系</span><em>成员 24 · 公司 2 · 专辑曲目 7…</em></div>
+        <div class="sum-cell"><b>0</b><span>冲突待仲裁</span><em class="em-exist">✓ 上一步已全部解决</em></div>
+      </div>
+
+      <div class="spoke" style="border-radius:12px">
+        <div class="spoke-head"><span class="t">🔗 查重匹配明细</span><span class="n">置信度低于阈值的项目会要求你逐条确认</span></div>
+        <div class="match-row"><input type="checkbox" checked><b>MODHAUS</b><span class="arrow">→</span>库内 #3「MODHAUS（모더스）」<span class="badge b-exist">匹配度 100%</span><span style="margin-left:auto" class="lock">仅建立关系，不修改原实体</span></div>
+        <div class="match-row"><input type="checkbox" checked><b>Kakao Entertainment</b><span class="arrow">→</span>库内 #7「Kakao娱乐」<span class="badge b-exist">匹配度 97%（别名命中）</span><span style="margin-left:auto" class="lock">仅建立关系，不修改原实体</span></div>
+        <div class="match-row"><input type="checkbox" checked><b>Girls Never Die</b><span class="arrow">→</span><span class="badge b-new">库内无匹配，将新建 Song</span><span style="margin-left:auto" class="lock">挂到 ASSEMBLE24 曲目 1</span></div>
+      </div>
+
+      <div class="progress-wrap">
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-text"><span>入库完成：25 新建 · 2 挂接 · 33 关系</span><span>耗时 3.2s · 全部写入来源标注</span></div>
+      </div>
+
+      <div class="done-banner">
+        <span class="ic">🎉</span>
+        <div>
+          <b>tripleS 已入库，整张关系网生成完毕</b>
+          <div style="font-size:12px;color:var(--app-text-secondary);margin-top:2px">
+            下一步建议：打开组合详情页递归补全 —— 每张专辑可再点「AI 补全曲目制作信息」；图库扫描会自动把 MV 影像关联到这 24 名成员。以后任何 AI 补全都跳过你已手动修改的字段（🔒 字段锁）。
+          </div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <button class="btn btn-ghost" onclick="go(2)">← 上一步</button>
+        <button class="btn btn-primary">前往组合详情页 →</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function go(n) {
+    for (let i = 1; i <= 3; i++) {
+      document.getElementById('screen' + i).classList.toggle('visible', i === n);
+      const st = document.getElementById('stp' + i);
+      st.classList.toggle('active', i === n);
+      st.classList.toggle('done', i < n);
+    }
+    document.getElementById('sl1').className = 'step-line' + (n > 1 ? ' done' : '');
+    document.getElementById('sl2').className = 'step-line' + (n > 2 ? ' done' : '');
+    window.scrollTo(0, 0);
+  }
+  function setTheme(t) {
+    document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+  }
+  const q = new URLSearchParams(location.search);
+  if (q.get('step')) go(+q.get('step'));
+  if (q.get('theme')) setTheme(q.get('theme'));
+</script>
+</body>
+</html>

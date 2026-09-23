@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>详情页 Hero 字体预览</title>
+<!-- 只引真实样式表，不做任何复制：scoped 只在构建期加 data-v 属性，裸引对同名 class 完全生效 -->
+<link rel="stylesheet" href="../../../frontend/src/styles/main.css" />
+<link rel="stylesheet" href="../../../frontend/src/views/entity-detail.css" />
+<!-- 预加载真实字体文件：避免无头截图时字体还没 commit 就取像（会拍到回退字体） -->
+<link rel="preload" href="../../../frontend/src/assets/fonts/playfair-500.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="../../../frontend/src/assets/fonts/playfair-400.woff2" as="font" type="font/woff2" crossorigin />
+<style>
+  /* 仅预览用：锁定横向不溢出，其余一律走真实规则 */
+  html, body { overflow-x: hidden; }
+</style>
+</head>
+<body>
+<!-- DOM 结构照抄 ArtistDetailView.vue 手机端分支（class 名一个不改） -->
+<div class="mv-page" id="page">
+  <div class="mv-container">
+    <section class="hero hero--pc-bg" id="hero">
+      <div class="hero-cover">
+        <img class="hero-cover-img" id="cover" src="../../../backend/storage/derived/avatars/artists/1.jpg" alt="" />
+        <div class="hero-cover-text">
+          <div class="hero-cover-name" id="name">裴珠泫 (배주현)</div>
+          <div class="hero-cover-meta">
+            <span id="metaWorks">128部作品</span>
+            <span id="metaGroup">Red Velvet</span>
+          </div>
+        </div>
+      </div>
+      <div class="hero-content">
+        <div class="hero-avatar" id="avatarFallback">裴</div>
+        <div class="hero-info">
+          <div class="hero-title">
+            <h1 class="hero-name" id="pcName">裴珠泫</h1>
+            <div class="hero-sub">IRENE · 배주현</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="tabs">
+      <div class="tabs-scroll">
+        <button class="tab tab--active" type="button">总览</button>
+        <button class="tab" type="button">作品</button>
+        <button class="tab" type="button">短片</button>
+        <button class="tab" type="button">照片</button>
+      </div>
+    </div>
+
+    <div class="block">
+      <h2 class="block-title">简介</h2>
+      <p class="bio">
+        Red Velvet 成员，1991 年 3 月 29 日出生于韩国大邱。本页顶部大字为手机端 Hero 的名字，
+        即本次字体方案的作用对象；下方标签与正文字体不变。
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== 与 utils/heroTitle.ts nameSizeTier() 同源的分档（原样搬，不简化）=====
+function nameTier(name) {
+  const n = (name || '').trim()
+  if (!n) return 'base'
+  const wide = /[\u3400-\u9fff\uac00-\ud7af]/.test(n)
+  if (wide && n.length >= 5) return 'long'
+  if (n.length <= 5) return 'xl'
+  if (n.length >= 10) return 'long'
+  return 'base'
+}
+
+/** 已实施的 B 方案口径：分档只看括号前的名字 */
+function tierOfCoverTitle(full) {
+  return nameTier(String(full).split(/[(（]/)[0])
+}
+
+const SERIF = "'Playfair Display', 'Iowan Old Style', Palatino, 'Songti SC', 'Noto Serif SC', Georgia, serif"
+
+// ===== CJK 候选字体（仅预览页使用：从 CDN 现拉，用于 A/B 对比；正式落地要自托管）=====
+// 每个候选给：字族名 + 需要注入的 CSS（都是 unicode-range 切片包，浏览器只下用到的片）
+const CJK_CANDIDATES = {
+  han: {
+    label: '思源宋体 Noto Serif SC',
+    family: "'Noto Serif SC'",
+    css: [
+      'https://cdn.jsdelivr.net/npm/noto-serif-sc@31.0.0/noto_serif_sc_regular/css.css',
+      'https://cdn.jsdelivr.net/npm/noto-serif-sc@31.0.0/noto_serif_sc_medium/css.css',
+    ],
+  },
+  // 汉字 + 韩文成套：本库名字里大量出现「汉字名 (韩文名)」，只换汉字会让韩文仍留在系统黑体上
+  // （实测现状用 Malgun Gothic 渲染 배주현，和汉字的明朝骨架不搭）
+  'han-kr': {
+    label: '思源宋体 + 韩文宋体（成套）',
+    family: "'Noto Serif SC'",
+    family2: "'Noto Serif KR'",
+    css: [
+      'https://cdn.jsdelivr.net/npm/noto-serif-sc@31.0.0/noto_serif_sc_regular/css.css',
+      'https://cdn.jsdelivr.net/npm/noto-serif-sc@31.0.0/noto_serif_sc_medium/css.css',
+      'https://cdn.jsdelivr.net/npm/noto-serif-kr@27.0.0/noto_serif_kr_regular/css.css',
+      'https://cdn.jsdelivr.net/npm/noto-serif-kr@27.0.0/noto_serif_kr_medium/css.css',
+    ],
+  },
+  wenkai: {
+    label: '霞鹜文楷 LXGW WenKai',
+    family: "'LXGW WenKai'",
+    css: ['https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-regular.css'],
+  },
+  'wenkai-screen': {
+    label: '霞鹜文楷 Screen',
+    family: "'LXGW WenKai Screen'",
+    // ⚠ 同包里 lxgwwenkaiscreen**r**.css 声明的字族是 'LXGW WenKai Screen R'（名字带 R），
+    //   与 lxgwwenkaiscreen.css 的 'LXGW WenKai Screen' 不是同一个 —— 引错文件会静默不生效
+    css: ['https://cdn.jsdelivr.net/npm/lxgw-wenkai-screen-webfont@1.7.0/lxgwwenkaiscreen.css'],
+  },
+  zhisong: {
+    label: '霞鹜新致宋 LXGW Neo ZhiSong',
+    family: "'LXGW Neo ZhiSong'",
+    css: ['https://cdn.jsdelivr.net/npm/lxgw-neo-zhisong-webfont@1.0.0/style.css'],
+  },
+}
+
+// ===== 与 utils/heroPalette.ts extractImageRgb 同源（原样搬）=====
+function sampleImageRgb(img) {
+  const size = 32
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return null
+  ctx.drawImage(img, 0, 0, size, size)
+  let data
+  try {
+    data = ctx.getImageData(0, 0, size, size).data
+  } catch (e) {
+    return null
+  }
+  let rSum = 0, gSum = 0, bSum = 0, wSum = 0
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue
+    const r = data[i], g = data[i + 1], b = data[i + 2]
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const l = (max + min) / 510
+    if (l > 0.93) continue
+    if (l < 0.08) continue        // extractImageRgb 用 skipLowLuma = true
+    const d = (max - min) / 255
+    const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1) || 1)
+    const w = 0.25 + s * s
+    rSum += r * w; gSum += g * w; bSum += b * w; wSum += w
+  }
+  if (wSum < 1) return null
+  return [Math.round(rSum / wSum), Math.round(gSum / wSum), Math.round(bSum / wSum)]
+}
+
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.decoding = 'async'
+    img.onload = () => resolve(img)
+    img.onerror = () => resolve(null)
+    img.src = src
+  })
+}
+
+// ===== 方案应用 =====
+const params = new URLSearchParams(location.search)
+const variant = params.get('v') || 'current'
+const nameText = params.get('name') || '裴珠泫 (배주현)'
+const tierSource = params.get('tier') || 'full'   // full=按完整文案分档；head=按括号前的名字分档
+const el = document.getElementById('name')
+el.textContent = nameText
+
+// CJK 候选：把字族插在 Playfair 之后（拉丁仍归 Playfair，汉字归候选，韩文/泰文继续走系统回退）
+const cjkKey = params.get('cjk') || ''
+const cjk = CJK_CANDIDATES[cjkKey] || null
+if (cjk) {
+  for (const href of cjk.css) {
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = href
+    document.head.appendChild(link)
+  }
+  document.fonts.load(`400 40px ${cjk.family}`).catch(() => {})
+  document.fonts.load(`500 40px ${cjk.family}`).catch(() => {})
+  if (cjk.family2) document.fonts.load(`400 40px ${cjk.family2}`).catch(() => {})
+}
+const STACK = cjk
+  ? `'Playfair Display', ${cjk.family}${cjk.family2 ? ', ' + cjk.family2 : ''}, 'Iowan Old Style', Palatino, 'Songti SC', 'Noto Serif SC', Georgia, serif`
+  : SERIF
+
+const state = { variant, name: nameText, tier: null, applied: '' }
+
+if (variant === 'impl') {
+  // 已实施的 B 方案：不加任何 inline style，只挂 entity-detail.css 里的真实分档类名，
+  // 因此这一格验证的是线上那份 CSS 本身，而不是预览页里复刻的一套数值
+  const tier = tierOfCoverTitle(nameText)
+  state.tier = tier
+  if (tier !== 'base') el.classList.add(`hero-cover-name--${tier}`)
+  // 只有在比较 CJK 候选时才追加字体族覆盖（不动字号/字距/行高）
+  if (cjk) el.style.fontFamily = STACK
+  state.applied = `real css class: ${tier}${cjk ? ' + cjk:' + cjkKey : ''}`
+} else if (variant !== 'current') {
+  el.style.fontFamily = STACK
+  if (variant === 'A') {
+    // 最小改动：只换字体族 + 字重降到 500，其余（30px / -0.03em / 1.2）不动
+    el.style.fontWeight = '500'
+    state.applied = 'family + weight 500'
+  } else if (variant === 'B') {
+    // 完全对齐首页轮播：家族 + 三档字号 + 字距 + 行高
+    const key = tierSource === 'head' ? nameText.split(/[(（]/)[0] : nameText
+    const tier = nameTier(key)
+    state.tier = tier
+    if (tier === 'xl') {
+      el.style.fontSize = 'clamp(36px, 11vw, 48px)'
+      el.style.fontWeight = '400'
+      el.style.letterSpacing = '0.06em'
+    } else if (tier === 'long') {
+      el.style.fontSize = 'clamp(24px, 7vw, 32px)'
+      el.style.fontWeight = '500'
+      el.style.letterSpacing = '0.01em'
+    } else {
+      el.style.fontSize = 'clamp(32px, 10vw, 44px)'
+      el.style.fontWeight = '500'
+      el.style.letterSpacing = '0.04em'
+    }
+    el.style.lineHeight = '1.05'
+    state.applied = 'family + tier:' + tier
+  } else if (variant === 'C') {
+    // 折中：家族/字重对齐轮播，字号收一档、字距不放到 0.04em
+    el.style.fontWeight = '500'
+    el.style.fontSize = 'clamp(28px, 8vw, 34px)'
+    el.style.letterSpacing = '0.02em'
+    el.style.lineHeight = '1.1'
+    state.applied = 'family + weight 500 + clamp(28-34px) + 0.02em'
+  }
+}
+
+// 底色抽色：与真实页面 pageStyle 同口径写入 --detail-tint
+loadImage(document.getElementById('cover').getAttribute('src')).then((img) => {
+  if (img) {
+    const rgb = sampleImageRgb(img)
+    if (rgb) document.getElementById('page').style.setProperty('--detail-tint', rgb.join(', '))
+  }
+
+  // 用同一串文字量宽度：衬线栈与纯 serif 兜底宽度不同，才能证明 Playfair 真的生效。
+  // 不用 await document.fonts.ready —— 在 --virtual-time-budget 下它会挂住，
+  // 改为轮询到「宽度出现差异」或超时为止（前一次实测能在无 await 时跑完）。
+  const probe = (family, text = 'Karina Han') => {
+    const s = document.createElement('span')
+    s.textContent = text
+    s.style.cssText =
+      'position:absolute;left:-9999px;top:0;white-space:nowrap;font-size:40px;font-weight:500;font-family:' + family
+    document.body.appendChild(s)
+    const w = s.getBoundingClientRect().width
+    s.remove()
+    return w
+  }
+
+  // 候选字族是否真的生效 —— ⚠ 不能用「量宽度比大小」判断：汉字在几乎所有中文字体里都是 1em 等宽
+  //   （40px 字号下 3 个汉字恒为 120px），换没换字体宽度都一样，量宽度会给出「没生效」的假结论。
+  //   真判据：① document.fonts.check 必须**带汉字样例**（默认样例是拉丁，CJK 分片不会被请求 → 恒 false）；
+  //          ② 该字族确有 status==='loaded' 的分片。
+  // ⚠ 必须在 measure() 内部现算：字体是异步加载的，脚本一跑完就算会永远拿到 false
+  let cjkApplied = null
+
+  const measure = () => {
+    const cs = getComputedStyle(el)
+    const fs = parseFloat(cs.fontSize)
+    // ⚠ document.fonts.check 的第二个参数必须给「汉字样例」：
+    //   默认样例是拉丁 'BESbswy'，而 CJK 字体是按 unicode-range 分片加载的，
+    //   拉丁分片根本没被请求 → 默认调用永远返回 false，会误判成「字体没生效」
+    const famName = cjk ? cjk.family.replace(/['"]/g, '') : null
+    // ⚠ check 的「样例文字」必须用**这个格子里真实的汉字**（去掉拉丁/韩文）：
+    //   ① 默认样例是拉丁 'BESbswy'，CJK 分片不会被请求 → 恒 false；
+    //   ② 写死某个名字（如 '裴珠泫'）同样错：字体按 unicode-range 分片加载，
+    //      这一格只拉到了「本月少女」那片，用别的字去 check 依然 false（实测踩过）。
+    const cjkSample = (nameText.match(/[\u3400-\u9fff]+/g) || []).join('')
+    const cjkReady = cjk && cjkSample ? document.fonts.check(`400 40px ${cjk.family}`, cjkSample) : null
+    const cjkLoadedSlices = cjk ? [...document.fonts].filter((f) => f.family === famName && f.status === 'loaded').length : null
+    const cjkProbe = null
+    cjkApplied = cjk ? (cjkReady && cjkLoadedSlices > 0) : null
+    const wPlayfair = probe("'Playfair Display', serif")
+    const wSerifOnly = probe('serif')
+    const applied = Math.abs(wPlayfair - wSerifOnly) > 0.5
+    window.__measured = {
+      variant: state.variant,
+      name: state.name,
+      tier: state.tier,
+      cjk: cjkKey || null,
+      cjkReady,
+      cjkLoadedSlices,
+      cjkApplied,
+      // fontFamily 的 computed 值返回的是「声明列表」，不代表真正用上的字体；
+      // 因此另附已注册字体族 + 实测宽度差，用于判断 Playfair 是否真的生效
+      familyDeclared: cs.fontFamily,
+      registered: [...document.fonts].map((f) => `${f.family}:${f.weight}`),
+      playfairReady: document.fonts.check('500 30px "Playfair Display"'),
+      playfairApplied: applied,
+      probeWidths: [wPlayfair, wSerifOnly],
+      fontWeight: cs.fontWeight,
+      fontSize: cs.fontSize,
+      lsEm: parseFloat(cs.letterSpacing) / fs,
+      lhRatio: parseFloat(cs.lineHeight) / fs,
+      tint: document.getElementById('page').style.getPropertyValue('--detail-tint'),
+      noOverflow: document.documentElement.scrollWidth <= window.innerWidth,
+    }
+    window.__ready = true
+    try { parent.postMessage({ type: 'hero-measured', data: window.__measured }, '*') } catch (e) {}
+    // ?debug=1：把溢出的真实原因写进 title，供 --dump-dom 读取
+    if (params.get('debug')) {
+      const cover = el.closest('.hero-cover')
+      document.title = 'D=' + JSON.stringify({
+        cls: el.className,
+        rectW: +el.getBoundingClientRect().width.toFixed(1),
+        clientW: el.clientWidth,
+        scrollW: el.scrollWidth,
+        whiteSpace: cs.whiteSpace,
+        overflowWrap: cs.overflowWrap,
+        wordBreak: cs.wordBreak,
+        parent: el.parentElement.className,
+        parentW: el.parentElement.clientWidth,
+        parentDisplay: getComputedStyle(el.parentElement).display,
+        coverOverflow: cover ? getComputedStyle(cover).overflow : null,
+        coverScrollW: cover ? cover.scrollWidth : null,
+        coverClientW: cover ? cover.clientWidth : null,
+      })
+    }
+    return applied
+  }
+
+  measure()
+  let tries = 0
+  const t = setInterval(() => {
+    // 选 CJK 候选时，要等到「候选字族真的生效」才停轮询（CDN 拉片有延迟，早停会拍到回退字形）
+    const done = measure() && (!cjk || cjkApplied)
+    if (done || ++tries > 600) clearInterval(t)
+  }, 100)
+})
+</script>
+</body>
+</html>

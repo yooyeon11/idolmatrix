@@ -1,0 +1,103 @@
+# =============================================================
+# K-pop 媒体库 —— 绿联 NAS (UGOS Pro) Docker Compose 部署
+#
+# 使用方法（NAS 上不构建镜像，直接导入 tar 后 compose 启动）：
+#   1. 在开发机执行：docker build --platform linux/amd64 -t idolmatrix:3.4.9 .
+#                      docker save idolmatrix:3.4.9 -o idolmatrix-3.4.9.tar
+#   2. 将 idolmatrix-3.4.9.tar 与 docker-compose.yml、.env.nas.example 上传到 NAS
+#   3. 在 NAS 上导入镜像：docker load -i idolmatrix-3.4.9.tar
+#   4. 可选：复制 .env.nas.example 为 .env 自定义路径（不复制则用默认 /volume1/kpop/*）
+#   5. 在项目目录执行：docker compose up -d
+#   6. 浏览器打开：http://<NAS-IP>:8010
+#   7. 升级 ffmpeg / 换机器后，用 http://<NAS-IP>:8010 的「设置 → 硬件转码」核对
+#      设备识别 / 编码器 / 真实试编 / **硬解能力** 四项，见 /api/system/hw-accel
+#
+# 注意：★ 必须使用 image: 启动，绝不能写 build: 。
+#        NAS 上若保留 build: 会用 Dockerfile 重新构建（拉 GitHub 源还极慢），导致启动失败。
+#
+# 路径说明（宿主机侧由你自定义，容器侧固定）：
+#   INCOMING_DIR —— 待整理文件夹（把视频丢进来，前端「待整理」页扫描入库）
+#   LIBRARY_DIR  —— 正式库文件夹（入库后的视频按规则存放）
+#   DERIVED_DIR  —— 派生文件（缩略图 / 转码产物）
+#   MT_PHOTOS_DIR—— MT Photos 图库所在目录（官方/粉丝贴 sidecar txt 成帖用，只读）
+#   DB_DIR       —— SQLite 数据库目录（★必须挂卷：DB 文件就在这份卷里，
+#                    容器删除/重建不丢数据；备份请用 sqlite3 .backup 在线备份，
+#                    见下方 DB_DIR 卷注释与 .env.nas.example 说明）
+# =============================================================
+
+services:
+  kpop-media:
+    # ★ NAS 上只认 image，禁止 build:（见文件头注释）
+    image: idolmatrix:3.6.5
+    container_name: kpop-media
+    restart: unless-stopped
+    ports:
+      # ★ 可自定义：宿主机端口 -> 容器 8010
+      - "${HOST_PORT:-8010}:8010"
+    environment:
+      # ==== 媒体路径（容器内固定，与下方卷挂载一一对应，一般无需改动）====
+      STORAGE_INCOMING_DIR: /data/incoming
+      STORAGE_INCOMING_BILI_DIR: /data/incoming-bilibili
+      STORAGE_LIBRARY_DIR: /data/library
+      STORAGE_DERIVED_DIR: /data/derived
+      DATABASE_URL: sqlite:////data/db/kpop_media.db
+      # ==== FFmpeg（镜像内已内置完整最新版，显式指定路径）====
+      FFMPEG_PATH: /usr/local/bin/ffmpeg
+      FFPROBE_PATH: /usr/local/bin/ffprobe
+      # ==== 时区 ====
+      TZ: "${TZ:-Asia/Shanghai}"
+      # ==== 登录门禁（v3.2.0+）====
+      # AUTH_REQUIRED: auto=必须登录（零用户时走 /setup）；false=紧急关闭门禁，
+      #   局域网可直接 /setup；公网初始化必须设 BOOTSTRAP_TOKEN，建号后立刻删掉
+      AUTH_REQUIRED: "${AUTH_REQUIRED:-auto}"
+      # ==== 硬件转码 ====
+      # auto ：自动探测。优先 VAAPI；无核显 / 无 /dev/dri 时自动回退软件转码
+      # none ：强制软件转码 | qsv：强制 QSV | vaapi：强制 VAAPI
+      #        （强制探测失败同样会回退软件转码）
+      # ★ 8.1 起 VA-API 驱动由镜像自带的**多厂商**驱动集提供
+      #   （Intel iHD / i965、AMD radeonsi），libva 会自行扫描驱动目录并逐个试，
+      #   换 NAS / 换显卡都不需要改这里。
+      TRANSCODE_HWACCEL: "${TRANSCODE_HWACCEL:-auto}"
+      # ==== 硬件解码（CPU 占用的大头）====
+      # auto ：源编码在该 GPU 上能硬解时，走「GPU 解码 → GPU 缩放 → GPU 编码」全链路；
+      #        4K AV1/VP9 源上 CPU 占用下降最明显；
+      #        不能硬解（编码/位深不支持）时自动退回「软解 + 硬编」，不会失败。
+      # off  ：始终软解 + 硬编（保守档；遇到花屏 / 个别片源异常时用它排查）
+      TRANSCODE_HW_DECODE: "${TRANSCODE_HW_DECODE:-auto}"
+      # ★ 不要在这里写 LIBVA_DRIVER_NAME：镜像内是 jellyfin 特供 libva，
+      #   它只认 LIBVA_DRIVER_NAME_JELLYFIN，标准名根本不读（写了不生效，
+      #   历史配置里那行 iHD 一直是个安慰剂）。默认也不需要指定驱动名。
+      #   仅在必须强制时打开下面这行（取值示例：iHD / i965 / radeonsi）：
+      # LIBVA_DRIVER_NAME_JELLYFIN: iHD
+      # ★ 跨站写请求放行（全局开关）：false 严格 CSRF。
+      #   外部域名/内网穿透(节点小宝)访问报「跨站请求被拒绝 (403)」时设 true。
+      ALLOW_CROSS_ORIGIN_WRITES: "${ALLOW_CROSS_ORIGIN_WRITES:-false}"
+    devices:
+      # ★ GPU 设备透传 —— VAAPI / QSV / VCN 硬解硬编都要靠它，**厂商无关**。
+      #   Intel 核显、AMD APU/独显都是 /dev/dri/renderD128（多卡则往后排 D129...）。
+      #   先在宿主机确认存在：ls -la /dev/dri/       （看不到 renderD* 才是真没有）
+      #   如确实不用硬转（纯 CPU），可删除本段。
+      - /dev/dri:/dev/dri
+    volumes:
+      # ★ 可自定义：待整理文件夹（宿主机路径 : 容器路径）
+      - "${INCOMING_DIR:-/volume1/kpop/incoming}:/data/incoming"
+      # ★ 可自定义：B站待整理文件夹（bili-sync / Bili23 下载输出指到这）
+      - "${INCOMING_BILI_DIR:-/volume1/kpop/incoming-bilibili}:/data/incoming-bilibili"
+      # ★ 可自定义：正式库文件夹
+      - "${LIBRARY_DIR:-/volume1/kpop/library}:/data/library"
+      # ★ 可自定义：派生文件（缩略图 / 转码产物）
+      - "${DERIVED_DIR:-/volume1/kpop/derived}:/data/derived"
+      # ★ 可自定义：MT Photos 照片目录（官方/粉丝成帖要读里面的 txt）。
+      #   宿主机填 MT 图库根目录，容器内固定 /data/mt-photos。
+      #   然后在设置里把「MT 磁盘路径前缀」填成 MT 里看到的同一目录。
+      - "${MT_PHOTOS_DIR:-/volume1/photo}:/data/mt-photos:ro"
+      # ★ 可自定义：数据库目录（★ 必须挂卷！数据库文件 kpop_media.db 在其中）
+      #   备份（WAL 模式务必用 sqlite3 在线备份，勿直接 cp .db）：
+      #     sqlite3 /volume1/kpop/db/kpop_media.db ".backup '/volume1/kpop/db/kpop_media.backup.db'"
+      - "${DB_DIR:-/volume1/kpop/db}:/data/db"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8010/api/system/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

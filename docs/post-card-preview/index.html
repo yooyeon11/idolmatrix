@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>照片墙帖子卡片 · 旧 / 新对照</title>
+<style>
+  /* 令牌逐字取自 frontend/src/styles/main.css（浅色 = :root，深色 = data-theme=dark 覆盖） */
+  :root {
+    --sa-bg: #f7f8fa;
+    --sa-elevated: #ffffff;
+    --sa-subtle: #eef0f4;
+    --sa-hover: #e6e9f0;
+    --sa-border-subtle: rgba(15, 23, 42, 0.06);
+    --sa-border: rgba(15, 23, 42, 0.12);
+    --sa-text-primary: #1f2329;
+    --sa-text-secondary: #5b6470;
+    --sa-text-tertiary: #77818f;
+    --sa-accent: #0485f7;
+    /* HeroUI 的 shadow-surface / field-shadow 三层轻投影，取自 main.css 现有 HeroUI 规格块 */
+    --surface-shadow:
+      0 2px 4px rgba(0, 0, 0, 0.04),
+      0 1px 2px rgba(0, 0, 0, 0.06),
+      0 0 1px rgba(0, 0, 0, 0.06);
+  }
+  html[data-theme='dark'] {
+    --sa-bg: #0e0e12;
+    --sa-elevated: #15151b;
+    --sa-subtle: #1c1c24;
+    --sa-hover: #22222c;
+    --sa-border-subtle: rgba(255, 255, 255, 0.06);
+    --sa-border: rgba(255, 255, 255, 0.1);
+    --sa-text-primary: #ececf1;
+    --sa-text-secondary: #9898a8;
+    --sa-text-tertiary: #7d7d8e;
+    --sa-accent: #0485f7;
+    /* HeroUI 在深色下把 surface / field shadow 置为 none，项目现有实现照做 */
+    --surface-shadow: none;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--sa-bg);
+    color: var(--sa-text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 28px 20px 60px; }
+
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+  .topbar h1 { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
+  .topbar p { margin: 0; font-size: 13px; color: var(--sa-text-secondary); max-width: 620px; }
+  .toggle {
+    flex: none; height: 34px; padding: 0 16px; border-radius: 9999px;
+    border: 1px solid var(--sa-border); background: var(--sa-elevated); color: var(--sa-text-secondary);
+    font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  .toggle:hover { background: var(--sa-hover); color: var(--sa-text-primary); }
+
+  .legend {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    margin-bottom: 10px; font-size: 13px; font-weight: 600;
+  }
+  .legend span:first-child { color: var(--sa-text-secondary); }
+  .legend span:last-child { color: var(--sa-accent); }
+
+  .post-row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 26px; align-items: start; }
+
+  /* ============ 共用的媒体网格（这一块两版没改） ============ */
+  .post-grid { display: grid; gap: 4px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .post-grid--1 { grid-template-columns: minmax(0, 1fr); }
+  .post-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .post-cell {
+    position: relative; display: block; width: 100%; padding: 0; border: 0; cursor: pointer;
+    background: var(--sa-subtle); overflow: hidden; aspect-ratio: 1; border-radius: 8px;
+  }
+  .post-media { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--sa-subtle); }
+  .post-more {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.48); color: #fff; font-size: 22px; font-weight: 650; letter-spacing: 0.02em;
+  }
+  .post-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .post-author { font-size: 12px; font-weight: 600; color: var(--sa-accent); word-break: break-word; }
+  .post-date { font-size: 12px; color: var(--sa-text-tertiary); }
+  .post-del { flex: none; border: 0; background: transparent; color: var(--sa-text-tertiary); font-size: 12px; font-family: inherit; cursor: pointer; padding: 2px 0 0; white-space: nowrap; }
+
+  /* ============ 现状：逐字照抄 PhotoGallery.vue 的 .post-card 一系 ============ */
+  .old .post-card {
+    min-width: 0;
+    border: 1px solid var(--sa-border-subtle);
+    border-radius: 14px;
+    background: var(--sa-elevated);
+    padding: 12px;
+  }
+  .old .post-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .old .post-head-main { min-width: 0; flex: 1; }
+  .old .post-caption {
+    margin: 0; font-size: 13px; line-height: 1.55; color: var(--sa-text-primary);
+    white-space: pre-wrap; word-break: break-word;
+    display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .old .post-sub { margin-top: 6px; }
+
+  /* ============ 候选：HeroUI v3 规格（映射到 --sa-* 令牌） ============ */
+  /* .card 的 padding 16 / gap 12 / radius min(32px,--radius-3xl,本项目 rounded-3xl=24px)
+     / box-shadow: var(--shadow-surface) / 无边框；caption = Typography body-sm 14px/1.5 */
+  .new .post-card {
+    min-width: 0;
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 16px;
+    border-radius: 24px;
+    background: var(--sa-elevated);
+    box-shadow: var(--surface-shadow);
+  }
+  .new .post-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .new .post-head-main { min-width: 0; flex: 1; }
+  .new .post-caption {
+    margin: 0; font-size: 14px; line-height: 1.5; color: var(--sa-text-primary);
+    white-space: pre-wrap; word-break: break-word;
+    display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .new .post-sub { margin-top: 4px; }
+
+  .diffs { margin-top: 34px; border-top: 1px solid var(--sa-border-subtle); padding-top: 20px; }
+  .diffs h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+  .diffs table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .diffs th, .diffs td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--sa-border-subtle); vertical-align: top; }
+  .diffs th { color: var(--sa-text-secondary); font-weight: 600; }
+  .diffs td code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--sa-text-secondary); }
+  .note { margin-top: 16px; font-size: 12px; color: var(--sa-text-tertiary); line-height: 1.7; }
+
+  @media (max-width: 760px) {
+    .post-row, .legend { grid-template-columns: 1fr; gap: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div>
+      <h1>照片墙「帖子」卡片 · 旧 / 新对照</h1>
+      <p>同一批真实数据（正文、日期、缩略图均取自本机库的 instagram 帖组）分别用两套卡片渲染：左侧是当前
+        <code>PhotoGallery.vue</code> 的 <code>.post-card</code>，右侧是 HeroUI v3 规格（数值映射到 <code>--sa-*</code> 令牌）。</p>
+    </div>
+    <button class="toggle" id="themeBtn" type="button">切到深色</button>
+  </div>
+
+  <div class="legend">
+    <span>现状 · 边框 + 圆角 14 + 内边距 12 + 正文 13px</span>
+    <span>候选 · 阴影分层 + 圆角 24 + 内边距 16 + 正文 14px</span>
+  </div>
+
+  <div id="rows"></div>
+
+  <div class="diffs">
+    <h2>差异清单（复刻点）</h2>
+    <table>
+      <thead>
+        <tr><th style="width:22%">项目</th><th style="width:26%">现状</th><th style="width:30%">HeroUI v3 规格</th><th style="width:22%">说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>分层方式</td>
+          <td><code>1px --sa-border-subtle</code> 描边</td>
+          <td><code>box-shadow: var(--shadow-surface)</code>，无边框</td>
+          <td>二选一，别叠加；深色下配方为 <code>none</code></td>
+        </tr>
+        <tr>
+          <td>圆角</td>
+          <td>14px</td>
+          <td><code>min(32px, --radius-3xl)</code> ＝ 24px</td>
+          <td>项目里 <code>.sa-btn</code> 已用 24px 这个档</td>
+        </tr>
+        <tr>
+          <td>内边距</td>
+          <td>12px</td>
+          <td>16px</td>
+          <td>卡内留白变宽</td>
+        </tr>
+        <tr>
+          <td>内容间距</td>
+          <td><code>margin-bottom: 12px</code></td>
+          <td><code>gap: 12px</code>（flex column）</td>
+          <td>结构更干净，间距不靠 margin</td>
+        </tr>
+        <tr>
+          <td>帖子正文</td>
+          <td>13px / 行高 1.55</td>
+          <td>Typography <code>body-sm</code>：14px / 1.5</td>
+          <td>6 行截断保留（HeroUI 的 <code>truncate</code> 只做单行）</td>
+        </tr>
+        <tr>
+          <td>作者 / 日期</td>
+          <td>12px / 600 / 强调色 · 12px 三级色</td>
+          <td>Typography <code>body-xs</code>（12px）± <code>weight</code> / <code>color=muted</code></td>
+          <td>本次刻意不动，避免一张的改动过大</td>
+        </tr>
+        <tr>
+          <td>媒体网格</td>
+          <td>gap 4 / 格圆角 8 / <code>aspect-ratio:1</code></td>
+          <td>不变</td>
+          <td>两版共用同一套</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">
+      说明：本机该来源（provider=<code>folder</code>）的帖子数据里 <code>author</code> 为空，为便于比较作者行排版，
+      两列统一用了示意值「HEEJIN」。缩略图是 480px 宽的真实缓存文件（平均约 35KB），与线上一致。
+    </p>
+  </div>
+
+</div>
+
+<script>
+  const POSTS = [
+    {
+      caption: "Ourii들이 뭘 좋아할지 몰라서 이틀치 다 들구 와또♡\nLunar Theory Start!🔥",
+      date: "2025-03-25 01:21",
+      total: 20,
+      photos: ["thumbs/p1161.jpg","thumbs/p1162.jpg","thumbs/p1163.jpg","thumbs/p1164.jpg","thumbs/p1165.jpg","thumbs/p1166.jpg"]
+    },
+    {
+      caption: "I love @beanpole_official 🌼🌸🌻💕",
+      date: "2025-04-18 16:00",
+      total: 20,
+      photos: ["thumbs/p1079.jpg","thumbs/p1080.jpg","thumbs/p1081.jpg","thumbs/p1082.jpg","thumbs/p1083.jpg","thumbs/p1084.jpg"]
+    },
+    {
+      caption: "함께여서 행복한 시간들의 연속",
+      date: "2025-05-07 08:06",
+      total: 20,
+      photos: ["thumbs/p1009.jpg","thumbs/p1010.jpg","thumbs/p1011.jpg","thumbs/p1012.jpg","thumbs/p1013.jpg","thumbs/p1014.jpg"]
+    }
+  ];
+  const AUTHOR = "HEEJIN";
+
+  function esc(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function gridClass(n) {
+    if (n <= 1) return "post-grid post-grid--1";
+    if (n === 2 || n === 4) return "post-grid post-grid--2";
+    return "post-grid post-grid--3";
+  }
+  function card(post) {
+    const extra = post.total - post.photos.length;
+    const cells = post.photos.map((src, i) => {
+      const more = i === post.photos.length - 1 && extra > 0
+        ? '<span class="post-more">+' + extra + "</span>" : "";
+      return '<button class="post-cell" type="button">' +
+        '<img class="post-media" src="' + src + '" alt="" loading="lazy">' + more +
+        "</button>";
+    }).join("");
+    return '<article class="post-card">' +
+      '<div class="post-head"><div class="post-head-main">' +
+      '<p class="post-caption">' + esc(post.caption) + "</p>" +
+      '<div class="post-sub"><span class="post-author">' + AUTHOR + "</span>" +
+      '<span class="post-date">' + post.date + "</span></div>" +
+      '</div><button class="post-del" type="button">删除帖子</button></div>' +
+      '<div class="' + gridClass(post.photos.length) + '">' + cells + "</div>" +
+      "</article>";
+  }
+
+  document.getElementById("rows").innerHTML = POSTS.map(p =>
+    '<div class="post-row"><div class="old">' + card(p) + '</div><div class="new">' + card(p) + "</div></div>"
+  ).join("");
+
+  const btn = document.getElementById("themeBtn");
+  btn.addEventListener("click", () => {
+    const dark = document.documentElement.getAttribute("data-theme") === "dark";
+    document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+    btn.textContent = dark ? "切到深色" : "切到浅色";
+  });
+</script>
+</body>
+</html>

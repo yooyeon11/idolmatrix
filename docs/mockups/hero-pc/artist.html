@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>艺人页 · 裴珠泫（IRENE）· PC Hero 效果</title>
+
+<!-- 直接引用真实样式表：hero--pc-bg 的规则就是线上跑的那一份 -->
+<link rel="stylesheet" href="../../../frontend/src/views/entity-detail.css">
+
+<style>
+  * { box-sizing: border-box; }
+
+  /* 浅色主题变量：与 styles/main.css 的 :root 一致 */
+  :root {
+    --app-bg: #f5f7fa;
+    --app-text: #1f2329;
+    --app-card-bg: #ffffff;
+    --app-border: #e8ebf0;
+    --sa-bg: #f7f8fa;
+    --sa-elevated: #ffffff;
+    --sa-subtle: #eef0f4;
+    --sa-hover: #e6e9f0;
+    --sa-border-subtle: rgba(15, 23, 42, 0.06);
+    --sa-border: rgba(15, 23, 42, 0.12);
+    --sa-text-primary: #1f2329;
+    --sa-text-secondary: #5b6470;
+    --sa-text-tertiary: #77818f;
+    --sa-accent: #6d5ce0;
+    --sa-accent-subtle: rgba(109, 92, 224, 0.1);
+    --sa-header-bg: rgba(255, 255, 255, 0.85);
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--app-bg);
+    color: var(--app-text);
+    font-family: 'Lato', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+      'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
+  button { font: inherit; }
+  a { color: inherit; }
+
+  /* 顶栏：静态复刻 SaHeader（预览环境不引组件） */
+  .pv-header {
+    position: sticky; top: 0; z-index: 50;
+    height: 48px;
+    border-bottom: 1px solid var(--sa-border-subtle);
+    background: var(--sa-header-bg);
+    backdrop-filter: saturate(1.8) blur(12px);
+    -webkit-backdrop-filter: saturate(1.8) blur(12px);
+  }
+  .pv-header-inner {
+    max-width: 1280px; margin: 0 auto; padding: 0 32px;
+    height: 100%; display: flex; align-items: center; gap: 24px;
+  }
+  .pv-brand { font-size: 15px; font-weight: 700; letter-spacing: -0.02em; }
+  .pv-nav { display: flex; gap: 18px; margin: 0 auto; font-size: 13px; color: var(--sa-text-secondary); }
+  .pv-note {
+    max-width: 1280px; margin: 0 auto; padding: 14px 32px 0;
+    font-size: 12px; line-height: 1.7; color: var(--sa-text-tertiary);
+  }
+  .pv-note b { color: var(--sa-text-secondary); font-weight: 500; }
+  .pv-label {
+    max-width: 1280px; margin: 8px auto 0; padding: 26px 32px 0;
+    border-top: 1px dashed var(--sa-border);
+    font-size: 12px; color: var(--sa-text-tertiary);
+  }
+  .pv-swatch {
+    display: inline-block; width: 10px; height: 10px;
+    margin: 0 2px 0 6px; border-radius: 50%; vertical-align: -1px;
+  }
+
+  /* VideoCard.vue 的样式是 scoped，预览页无法继承，这里按其原值复刻关键几条 */
+  .video-card {
+    display: block; cursor: pointer;
+    width: var(--video-card-width, 224px);
+    flex-shrink: 0; text-decoration: none; color: inherit;
+  }
+  .card-cover {
+    position: relative; aspect-ratio: 16 / 10;
+    border-radius: 12px; overflow: hidden; background: var(--sa-subtle);
+  }
+  .card-cover img { width: 100%; height: 100%; object-fit: cover; }
+  .cover-placeholder {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(255, 255, 255, 0.75); font-size: 20px;
+  }
+  .card-title {
+    margin-top: 10px; font-size: 14px; font-weight: 500;
+    color: var(--sa-text-primary); line-height: 1.5;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card-footer {
+    margin-top: 6px; display: flex; align-items: center;
+    justify-content: space-between; font-size: 12px;
+  }
+  .card-date {
+    color: var(--sa-text-tertiary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+</style>
+</head>
+<body>
+
+<header class="pv-header">
+  <div class="pv-header-inner">
+    <span class="pv-brand">idolMatrix</span>
+    <nav class="pv-nav">
+      <span>浏览</span><span>组合</span><span>艺人</span><span>短视频</span>
+      <span>歌曲</span><span>收藏</span><span>统计</span><span>博主</span>
+    </nav>
+  </div>
+</header>
+
+<div class="pv-note">
+  <b>静态预览</b>：直接引用 <code>frontend/src/views/entity-detail.css</code>，DOM 结构与 <code>ArtistDetailView.vue</code> 一致；
+  头像色按 <code>heroPalette.ts</code> 的抽色 + <code>vividifyRgb</code> 逻辑在前端实时算出。
+  数据取自本机 <code>backend/data/kpop_media.db</code> 的 artist id=1（裴珠泫 / IRENE，有头像、<b>无横幅</b> → 走封面虚化兜底）。
+</div>
+
+<div class="pv-label">艺人页 · 裴珠泫（IRENE）· 无横幅 → 头像虚化兜底</div>
+
+<div class="mv-page" id="pv-page-1">
+  <div class="mv-container">
+    <section class="hero hero--pc-bg">
+      <div class="hero-bg" aria-hidden="true">
+        <img class="hero-bg-img" src="./artist-1.jpg" alt="">
+      </div>
+
+      <!-- 手机端整图铺满层：PC 下 display:none，保留以核对结构完整性 -->
+      <div class="hero-cover">
+        <img class="hero-cover-img" src="./artist-1.jpg" alt="">
+        <div class="hero-cover-text">
+          <div class="hero-cover-name">裴珠泫 (배주현)</div>
+          <div class="hero-cover-meta"><span>2部作品</span><span>Red Velvet</span></div>
+        </div>
+      </div>
+
+      <div class="hero-content">
+        <div class="hero-avatar">
+          <img class="hero-avatar-img" src="./artist-1.jpg" alt="">
+        </div>
+        <div class="hero-info">
+          <div class="hero-title">
+            <h1 class="hero-name">裴珠泫</h1>
+            <div class="hero-meta hero-mobile"><span class="hero-meta-item">2部作品</span></div>
+            <div class="hero-sub">IRENE · 배주현</div>
+          </div>
+          <div class="hero-tags">
+            <span class="badge">Girl Group</span>
+            <span class="badge">歌手</span>
+          </div>
+          <div class="hero-group">
+            <span class="hero-group-label">组合</span>
+            <span class="hero-group-name">Red Velvet</span>
+            <span class="hero-group-detail">· 2014-08-01 加入 · 队长 · 主Rapper · 领舞 · 门面</span>
+          </div>
+          <div class="hero-stats hero-pc">
+            <div class="stat"><div class="stat-num">0</div><div class="stat-label">MV 出演</div></div>
+            <div class="stat"><div class="stat-num">1</div><div class="stat-label">现场 · 直拍</div></div>
+            <div class="stat"><div class="stat-num">2</div><div class="stat-label">全部作品</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="tabs">
+      <div class="tabs-scroll">
+        <button class="tab tab--active">概览</button>
+        <button class="tab">全部作品</button>
+        <button class="tab">音乐视频</button>
+        <button class="tab">现场 · 直拍</button>
+        <button class="tab">幕后 · 花絮</button>
+        <button class="tab">短视频</button>
+        <button class="tab">官方</button>
+        <button class="tab">粉丝</button>
+        <button class="tab">照片墙</button>
+      </div>
+    </div>
+
+    <div class="overview-grid">
+      <div class="overview-main">
+        <section class="block">
+          <h2 class="block-title">艺人简介</h2>
+          <p class="bio bio--muted">暂无简介</p>
+        </section>
+
+        <section class="block">
+          <h2 class="block-title">最新作品</h2>
+          <div class="card-row">
+            <a class="video-card" href="#">
+              <div class="card-cover">
+                <img src="./thumb-1.webp" alt="">
+              </div>
+              <div class="card-title">260806 IRENE - Surfin' Boy [M COUNTDOWN FanCam 4K]</div>
+              <div class="card-footer">
+                <span class="badge">PersonalFancam</span>
+                <span class="card-date">2026/08/08</span>
+              </div>
+            </a>
+            <a class="video-card" href="#">
+              <div class="card-cover">
+                <div class="cover-placeholder">▶</div>
+              </div>
+              <div class="card-title">260817 Irene - Surfin' Boy [SBS GayoDaejeon Summer OfficialFanCam 4K]</div>
+              <div class="card-footer">
+                <span class="badge">OfficialFancam</span>
+                <span class="card-date">2026/08/18</span>
+              </div>
+            </a>
+          </div>
+        </section>
+
+        <section class="block">
+          <h2 class="block-title">近期动态</h2>
+          <div class="timeline">
+            <div class="timeline-item">
+              <span class="timeline-dot"></span>
+              <div class="timeline-body">
+                <button class="timeline-title">260817 Irene - Surfin' Boy [SBS GayoDaejeon Summer OfficialFanCam 4K]</button>
+                <div class="timeline-meta">2026/08/18 · OfficialFancam</div>
+              </div>
+            </div>
+            <div class="timeline-item">
+              <span class="timeline-dot"></span>
+              <div class="timeline-body">
+                <button class="timeline-title">260806 IRENE - Surfin' Boy [M COUNTDOWN FanCam 4K]</button>
+                <div class="timeline-meta">2026/08/08 · PersonalFancam</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="overview-side">
+        <section class="side-card">
+          <h3 class="side-title">资料速览</h3>
+          <div class="side-grid">
+            <div class="side-row"><div class="side-label">韩文名</div><div class="side-value">배주현</div></div>
+            <div class="side-row"><div class="side-label">艺名</div><div class="side-value">IRENE</div></div>
+            <div class="side-row"><div class="side-label">出生</div><div class="side-value">1991/03/29 · 韩国大邱广域市</div></div>
+            <div class="side-row"><div class="side-label">出道</div><div class="side-value">2014/08/01</div></div>
+            <div class="side-row"><div class="side-label">职业</div><div class="side-value">歌手</div></div>
+            <div class="side-row"><div class="side-label">组合</div><div class="side-value">Red Velvet · 2014-08-01 加入</div></div>
+            <div class="side-row"><div class="side-label">担当</div><div class="side-value">队长 · 主Rapper · 领舞 · 门面</div></div>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---- 复刻 heroPalette.ts：sampleImageRgb + vividifyRgb ----
+   用真实头像算 --detail-tint / --detail-tint-vivid，保证预览与线上同源 */
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  if (max === min) return [0, 0, l]
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h = 0
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6
+  else if (max === g) h = ((b - r) / d + 2) / 6
+  else h = ((r - g) / d + 4) / 6
+  return [h, s, l]
+}
+function hueToRgb(p, q, t) {
+  if (t < 0) t += 1
+  if (t > 1) t -= 1
+  if (t < 1 / 6) return p + (q - p) * 6 * t
+  if (t < 1 / 2) return q
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+  return p
+}
+function hslToRgb(h, s, l) {
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v] }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  return [
+    Math.round(hueToRgb(p, q, h + 1 / 3) * 255),
+    Math.round(hueToRgb(p, q, h) * 255),
+    Math.round(hueToRgb(p, q, h - 1 / 3) * 255),
+  ]
+}
+function sampleImageRgb(img) {
+  const size = 32
+  const canvas = document.createElement('canvas')
+  canvas.width = size; canvas.height = size
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(img, 0, 0, size, size)
+  const data = ctx.getImageData(0, 0, size, size).data
+  let rS = 0, gS = 0, bS = 0, wS = 0
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue
+    const r = data[i], g = data[i + 1], b = data[i + 2]
+    const max = Math.max(r, g, b), min = Math.min(r, g, b)
+    const l = (max + min) / 510
+    if (l > 0.93) continue
+    if (l < 0.08) continue
+    const d = (max - min) / 255
+    const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1) || 1)
+    const w = 0.25 + s * s
+    rS += r * w; gS += g * w; bS += b * w; wS += w
+  }
+  if (wS < 1) return null
+  return [Math.round(rS / wS), Math.round(gS / wS), Math.round(bS / wS)]
+}
+function vividifyRgb(rgb, sMin = 0.45, lMin = 0.64, lMax = 0.78) {
+  const parts = rgb.split(',').map((x) => Number(x.trim()))
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null
+  const [h, s, l] = rgbToHsl(parts[0], parts[1], parts[2])
+  if (s < 0.12) return null
+  const [r, g, b] = hslToRgb(h, Math.max(s, sMin), Math.min(Math.max(l, lMin), lMax))
+  return `${r}, ${g}, ${b}`
+}
+
+const img = new Image()
+img.onload = () => {
+  const sampled = sampleImageRgb(img)
+  if (!sampled) return
+  const tint = `${sampled[0]}, ${sampled[1]}, ${sampled[2]}`
+  const vivid = vividifyRgb(tint) || '244, 114, 182'
+  const page = document.getElementById('pv-page-1')
+  page.style.setProperty('--detail-tint', tint)
+  page.style.setProperty('--detail-tint-vivid', vivid)
+  const sw = document.createElement('span')
+  sw.innerHTML = `抽色 <span class="pv-swatch" style="background:rgb(${tint})"></span>rgb(${tint})` +
+                 ` · 提纯 <span class="pv-swatch" style="background:rgb(${vivid})"></span>rgb(${vivid})`
+  document.querySelector('.pv-label').appendChild(sw)
+}
+img.src = './artist-1.jpg'
+</script>
+
+</body>
+</html>

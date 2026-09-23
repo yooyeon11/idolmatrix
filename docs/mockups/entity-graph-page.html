@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>组合关系网 — 示意图</title>
+<style>
+  :root {
+    --app-bg: #f5f7fa; --app-text: #1f2329; --app-card-bg: #ffffff;
+    --app-border: #e8ebf0; --app-text-secondary: #5b6470; --app-text-tertiary: #77818f;
+    --sa-accent: #6d5ce0; --sa-accent-subtle: rgba(109,92,224,.1); --sa-accent-border: rgba(109,92,224,.35);
+    --ok: #18a058; --ok-subtle: rgba(24,160,88,.12);
+    --warn: #d97706; --warn-subtle: rgba(217,119,6,.14);
+    --company: #b8860b; --company-subtle: rgba(184,134,11,.12);
+    --album: #0e9f6e; --album-subtle: rgba(14,159,110,.12);
+    --song: #d0417e; --song-subtle: rgba(208,65,126,.12);
+    --video: #4f6bed; --video-subtle: rgba(79,107,237,.12);
+    --shadow: 0 1px 3px rgba(15,23,42,.06), 0 4px 16px rgba(15,23,42,.05);
+  }
+  html[data-theme='dark'] {
+    --app-bg: #0e0e12; --app-text: #ececf1; --app-card-bg: #15151b;
+    --app-border: rgba(255,255,255,.1); --app-text-secondary: #9898a8; --app-text-tertiary: #7d7d8e;
+    --sa-accent: #8b7cf0; --sa-accent-subtle: rgba(139,124,240,.12); --sa-accent-border: rgba(139,124,240,.35);
+    --shadow: 0 1px 3px rgba(0,0,0,.4);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Lato', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--app-bg); color: var(--app-text);
+  }
+  .toolbar-tip {
+    text-align: center; padding: 10px; font-size: 12px; color: var(--app-text-tertiary);
+    border-bottom: 1px dashed var(--app-border);
+  }
+  .theme-toggle { position: fixed; top: 14px; right: 16px; z-index: 99; display: flex; gap: 8px; }
+  .theme-toggle button {
+    border: 1px solid var(--app-border); background: var(--app-card-bg);
+    color: var(--app-text-secondary); border-radius: 8px; padding: 6px 14px; font-size: 12px; cursor: pointer;
+  }
+  .page { max-width: 1180px; margin: 0 auto; padding: 20px 28px 60px; }
+
+  /* ===== 页头 ===== */
+  .head { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .head .avatar {
+    width: 52px; height: 52px; border-radius: 50%; flex: none;
+    background: linear-gradient(135deg, #8b7cf0, #d06ce0); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 19px;
+  }
+  .head h1 { margin: 0; font-size: 22px; }
+  .head .meta { font-size: 12.5px; color: var(--app-text-secondary); margin-top: 3px; }
+  .head .stats { margin-left: auto; display: flex; gap: 20px; text-align: right; }
+  .head .stats b { display: block; font-size: 18px; }
+  .head .stats span { font-size: 11px; color: var(--app-text-tertiary); }
+
+  /* ===== 图布 ===== */
+  .graph-card {
+    position: relative; background: var(--app-card-bg); border: 1px solid var(--app-border);
+    border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+  }
+  .graph-toolbar {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--app-border); flex-wrap: wrap;
+  }
+  .graph-toolbar input {
+    border: 1px solid var(--app-border); border-radius: 8px; background: var(--app-bg);
+    color: var(--app-text); padding: 7px 12px; font-size: 13px; width: 220px; outline: none; font-family: inherit;
+  }
+  .chip {
+    border: 1px solid var(--app-border); border-radius: 999px; padding: 4px 13px;
+    font-size: 12px; cursor: pointer; color: var(--app-text-secondary); background: var(--app-card-bg);
+    user-select: none;
+  }
+  .chip .dotc { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+  .chip.off { opacity: .38; }
+  .zoom { margin-left: auto; display: flex; gap: 6px; }
+  .zoom button {
+    border: 1px solid var(--app-border); background: var(--app-card-bg); color: var(--app-text-secondary);
+    border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 15px;
+  }
+  .canvas { position: relative; height: 620px; }
+  .canvas svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .node {
+    position: absolute; transform: translate(-50%, -50%);
+    display: flex; align-items: center; gap: 8px;
+    background: var(--app-card-bg); border: 1.5px solid var(--app-border);
+    border-radius: 12px; padding: 7px 13px; cursor: pointer; box-shadow: var(--shadow);
+    white-space: nowrap; z-index: 2; transition: box-shadow .15s, border-color .15s;
+  }
+  .node:hover { border-color: var(--sa-accent); z-index: 5; }
+  .node.sel { border-color: var(--sa-accent); box-shadow: 0 0 0 3px var(--sa-accent-subtle); z-index: 5; }
+  .node .dot { width: 26px; height: 26px; border-radius: 50%; flex: none; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; }
+  .node .nm { font-size: 13px; font-weight: 700; line-height: 1.25; }
+  .node .sb { font-size: 10.5px; color: var(--app-text-tertiary); line-height: 1.3; }
+  .n-center { border: 2px solid var(--sa-accent); background: var(--sa-accent-subtle); padding: 10px 18px; border-radius: 14px; }
+  .n-center .nm { font-size: 15px; }
+  .n-member .dot { background: #64748b; }
+  .n-member.former { border-style: dashed; border-color: var(--warn); }
+  .n-member.former .dot { background: var(--warn); }
+  .n-subunit { border-style: dashed; border-color: var(--sa-accent-border); }
+  .n-subunit .dot { background: var(--sa-accent); }
+  .n-company .dot { background: var(--company); }
+  .n-album .dot { background: var(--album); border-radius: 6px; }
+  .n-song .dot { background: var(--song); border-radius: 6px; }
+  .n-video .dot { background: var(--video); border-radius: 6px; }
+  .n-more { border-style: dotted; color: var(--app-text-secondary); }
+
+  .legend {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 10px; z-index: 6; white-space: nowrap;
+    background: var(--app-card-bg); border: 1px solid var(--app-border); border-radius: 10px;
+    padding: 9px 13px; font-size: 11px; color: var(--app-text-secondary); box-shadow: var(--shadow);
+    display: flex; gap: 13px; flex-wrap: wrap;
+  }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: 3px; }
+
+  /* ===== 详情面板 ===== */
+  .panel {
+    position: absolute; top: 12px; right: 12px; bottom: 12px; width: 300px; z-index: 7;
+    background: var(--app-card-bg); border: 1px solid var(--app-border); border-radius: 12px;
+    box-shadow: var(--shadow); padding: 18px; overflow-y: auto;
+  }
+  .panel .p-close { position: absolute; top: 10px; right: 12px; cursor: pointer; color: var(--app-text-tertiary); border: none; background: none; font-size: 15px; }
+  .p-ava {
+    width: 58px; height: 58px; border-radius: 50%; margin-bottom: 10px;
+    display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 18px;
+    background: var(--warn);
+  }
+  .panel h2 { margin: 0 0 2px; font-size: 17px; }
+  .panel .p-alias { font-size: 12px; color: var(--app-text-tertiary); margin-bottom: 12px; }
+  .p-row { display: flex; font-size: 12.5px; padding: 6px 0; border-bottom: 1px dashed var(--app-border); }
+  .p-row .k { width: 76px; flex: none; color: var(--app-text-tertiary); }
+  .p-row .v { flex: 1; }
+  .p-sec { font-size: 12px; font-weight: 700; margin: 14px 0 6px; color: var(--app-text-secondary); }
+  .p-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .p-chip { font-size: 11px; border-radius: 6px; padding: 3px 9px; background: var(--album-subtle); color: var(--album); font-weight: 600; }
+  .p-chip.c-song { background: var(--song-subtle); color: var(--song); }
+  .p-chip.c-sub { background: var(--sa-accent-subtle); color: var(--sa-accent); }
+  .p-src { margin-top: 14px; font-size: 11.5px; color: var(--app-text-tertiary); line-height: 1.9; }
+  .p-src a { color: var(--sa-accent); text-decoration: none; }
+  .p-lock { margin-top: 12px; font-size: 11px; color: var(--app-text-tertiary); background: var(--app-bg); border-radius: 8px; padding: 8px 10px; line-height: 1.6; }
+  .status-tag { display: inline-block; font-size: 10.5px; border-radius: 5px; padding: 1px 7px; font-weight: 700; vertical-align: 2px; margin-left: 6px; }
+  .st-former { background: var(--warn-subtle); color: var(--warn); }
+
+  /* ===== 时间轴 ===== */
+  .tl-card {
+    margin-top: 16px; background: var(--app-card-bg); border: 1px solid var(--app-border);
+    border-radius: 14px; box-shadow: var(--shadow); padding: 18px 22px;
+  }
+  .tl-title { font-size: 14px; font-weight: 700; margin-bottom: 14px; display: flex; justify-content: space-between; }
+  .tl-title span { font-size: 12px; color: var(--app-text-tertiary); font-weight: 400; }
+  .tl-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .tl-row .who { width: 150px; flex: none; font-size: 12.5px; font-weight: 600; text-align: right; }
+  .tl-row .who small { display: block; font-weight: 400; color: var(--app-text-tertiary); font-size: 10.5px; }
+  .tl-track { flex: 1; position: relative; height: 22px; background: var(--app-bg); border-radius: 6px; }
+  .tl-bar { position: absolute; top: 3px; bottom: 3px; border-radius: 5px; font-size: 10.5px; color: #fff; display: flex; align-items: center; padding: 0 8px; font-weight: 600; }
+  .tl-bar.active { background: var(--ok); }
+  .tl-bar.former { background: var(--warn); }
+  .tl-bar.company { background: var(--company); }
+  .tl-axis { display: flex; margin-left: 162px; font-size: 10.5px; color: var(--app-text-tertiary); }
+  .tl-axis span { flex: 1; }
+</style>
+</head>
+<body>
+<div class="theme-toggle">
+  <button onclick="setTheme('light')">☀️ 浅色</button>
+  <button onclick="setTheme('dark')">🌙 深色</button>
+</div>
+<div class="toolbar-tip">示意图 · 组合关系网页（数据来自「AI 建库向导」入库结果，示例：tripleS）· 点击图中任意节点查看右侧详情</div>
+
+<div class="page">
+  <!-- 页头 -->
+  <div class="head">
+    <div class="avatar">tS</div>
+    <div>
+      <h1>tripleS <span style="font-size:14px;color:var(--app-text-tertiary);font-weight:400">트리플에스</span></h1>
+      <div class="meta">女子组合 · 韩国 · 出道 2022-10-13 · 上级组合无 · 小分队 4</div>
+    </div>
+    <div class="stats">
+      <div><b>24</b><span>成员</span></div>
+      <div><b>9</b><span>专辑</span></div>
+      <div><b>71</b><span>歌曲</span></div>
+      <div><b>38</b><span>影像</span></div>
+      <div><b>2</b><span>公司</span></div>
+    </div>
+  </div>
+
+  <!-- 关系图 -->
+  <div class="graph-card">
+    <div class="graph-toolbar">
+      <input type="text" placeholder="🔍 在关系网中搜索成员 / 歌曲…" readonly>
+      <span class="chip" onclick="this.classList.toggle('off')"><i class="dotc" style="background:#64748b"></i>成员</span>
+      <span class="chip" onclick="this.classList.toggle('off')"><i class="dotc" style="background:var(--sa-accent)"></i>小分队</span>
+      <span class="chip" onclick="this.classList.toggle('off')"><i class="dotc" style="background:var(--company)"></i>公司</span>
+      <span class="chip" onclick="this.classList.toggle('off')"><i class="dotc" style="background:var(--album)"></i>专辑</span>
+      <span class="chip" onclick="this.classList.toggle('off')"><i class="dotc" style="background:var(--song)"></i>歌曲</span>
+      <span class="chip" onclick="this.classList.toggle('off')"><i class="dotc" style="background:var(--video)"></i>影像</span>
+      <div class="zoom"><button>＋</button><button>－</button><button style="font-size:11px">重置</button></div>
+    </div>
+
+    <div class="canvas" id="canvas">
+      <svg class="edges" id="edges"></svg>
+
+      <!-- 中心 -->
+      <div class="node n-center" style="left:40%;top:45%" data-id="triples">
+        <div class="dot" style="background:var(--sa-accent);width:34px;height:34px;font-size:13px">tS</div>
+        <div><div class="nm">tripleS</div><div class="sb">2022-10-13 出道</div></div>
+      </div>
+
+      <!-- 小分队 -->
+      <div class="node n-subunit" style="left:20%;top:14%" data-id="aak"><div class="dot">AAK</div><div><div class="nm">Acid Angel from Kyoto</div><div class="sb">小分队 · 2022</div></div></div>
+      <div class="node n-subunit" style="left:42%;top:9%" data-id="kre"><div class="dot">+K</div><div><div class="nm">+(KR)ystal Eyes</div><div class="sb">小分队 · 2023</div></div></div>
+      <div class="node n-subunit" style="left:63%;top:17%" data-id="evol"><div class="dot">EV</div><div><div class="nm">EVOLution</div><div class="sb">小分队 · 2023</div></div></div>
+
+      <!-- 成员 -->
+      <div class="node n-member" style="left:12%;top:36%" data-id="seoyeon"><div class="dot">SY</div><div><div class="nm">Yoon SeoYeon</div><div class="sb">2003-04-29 · 在籍</div></div></div>
+      <div class="node n-member" style="left:9%;top:50%" data-id="hyerin"><div class="dot">HR</div><div><div class="nm">Jeong HyeRin</div><div class="sb">2003-04-14 · 在籍</div></div></div>
+      <div class="node n-member" style="left:13%;top:63%" data-id="jiwoo"><div class="dot">JW</div><div><div class="nm">Lee JiWoo</div><div class="sb">2005-07-27 · 在籍</div></div></div>
+      <div class="node n-member former" style="left:16%;top:76%" data-id="yuyeon"><div class="dot">YY</div><div><div class="nm">Kim YuYeon</div><div class="sb">2022-08 → 2024-05 退出</div></div></div>
+      <div class="node n-member n-more" style="left:31%;top:71%" data-id="more"><div><div class="nm">+20 名成员</div><div class="sb">点击展开</div></div></div>
+
+      <!-- 公司 -->
+      <div class="node n-company" style="left:59%;top:36%" data-id="modhaus"><div class="dot">M</div><div><div class="nm">MODHAUS</div><div class="sb">厂牌 · 2022 → 至今</div></div></div>
+      <div class="node n-company" style="left:61%;top:51%" data-id="kakao"><div class="dot">K</div><div><div class="nm">Kakao Entertainment</div><div class="sb">发行 · 2023 → 至今</div></div></div>
+
+      <!-- 专辑 -->
+      <div class="node n-album" style="left:48%;top:62%" data-id="generation"><div class="dot">G</div><div><div class="nm">Generation</div><div class="sb">Single · 2022-10-13</div></div></div>
+      <div class="node n-album" style="left:55%;top:76%" data-id="assemble"><div class="dot">A</div><div><div class="nm">ASSEMBLE</div><div class="sb">Mini · 2023-02-13 · 7曲</div></div></div>
+      <div class="node n-album" style="left:66%;top:61%" data-id="assemble24"><div class="dot">A24</div><div><div class="nm">ASSEMBLE24</div><div class="sb">正规 · 2024-05-08 · 24曲</div></div></div>
+
+      <!-- 歌曲 & 影像 -->
+      <div class="node n-song" style="left:38%;top:86%" data-id="gnd"><div class="dot">♪</div><div><div class="nm">Girls Never Die</div><div class="sb">主打 · ASSEMBLE24</div></div></div>
+      <div class="node n-video" style="left:62%;top:87%" data-id="gndmv"><div class="dot">▶</div><div><div class="nm">Girls Never Die MV</div><div class="sb">官方MV · 已入库</div></div></div>
+
+      <!-- 详情面板 -->
+      <div class="panel" id="panel">
+        <button class="p-close" onclick="closePanel()">✕</button>
+        <div class="p-ava">YY</div>
+        <h2>Kim YuYeon 김유연<span class="status-tag st-former">前成员</span></h2>
+        <div class="p-alias">别名：유연 / YuYeon（AI 建库时合并自 2 个来源）</div>
+        <div class="p-row"><div class="k">出生</div><div class="v">2005-06-02 · 韩国</div></div>
+        <div class="p-row"><div class="k">加入</div><div class="v">2022-08（ Wikidata P580）</div></div>
+        <div class="p-row"><div class="k">退出</div><div class="v" style="color:var(--warn);font-weight:700">2024-05（ Wikidata P582）</div></div>
+        <div class="p-row"><div class="k">担当</div><div class="v">Vocalist</div></div>
+        <div class="p-sec">所属小分队</div>
+        <div class="p-chips"><span class="p-chip c-sub">Acid Angel from Kyoto</span><span class="p-chip c-sub">+(KR)ystal Eyes</span></div>
+        <div class="p-sec">参与专辑 · 2</div>
+        <div class="p-chips"><span class="p-chip">Generation</span><span class="p-chip">ASSEMBLE</span></div>
+        <div class="p-sec">相关影像 · 6</div>
+        <div class="p-chips"><span class="p-chip c-song">Generation MV</span><span class="p-chip c-song"> personal fancam ×5</span></div>
+        <div class="p-src">📄 数据来源<br><a href="#">kpop.fandom.com/wiki/YuYeon</a><br><a href="#">wikidata.org/wiki/Q112xxx</a></div>
+        <div class="p-lock">🔒 「出生日期」「退出日期」已由你手动修改，后续 AI 补全将跳过这些字段</div>
+      </div>
+
+      <div class="legend">
+        <span><i style="background:#9ca3af"></i>成员关系</span>
+        <span><i style="background:var(--sa-accent)"></i>小分队（虚线）</span>
+        <span><i style="background:var(--company)"></i>公司关系（含起止）</span>
+        <span><i style="background:var(--album)"></i>专辑收录</span>
+        <span><i style="background:var(--song)"></i>歌曲</span>
+        <span><i style="background:var(--video)"></i>影像</span>
+        <span><i style="background:var(--warn)"></i>虚线边框 = 已退出</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 成员/公司时间轴 -->
+  <div class="tl-card">
+    <div class="tl-title">成员与公司变化轨迹 <span>2022 → 2026 · 悬停可看具体日期；数据来自成员关系的 join/leave 与公司关系的起止日期</span></div>
+    <div class="tl-row"><div class="who">Yoon SeoYeon<small>2022-07 加入</small></div><div class="tl-track"><div class="tl-bar active" style="left:30%;width:70%">在籍</div></div></div>
+    <div class="tl-row"><div class="who">Jeong HyeRin<small>2022-07 加入</small></div><div class="tl-track"><div class="tl-bar active" style="left:30%;width:70%">在籍</div></div></div>
+    <div class="tl-row"><div class="who">Lee JiWoo<small>2022-08 加入</small></div><div class="tl-track"><div class="tl-bar active" style="left:32%;width:68%">在籍</div></div></div>
+    <div class="tl-row"><div class="who">Kim YuYeon<small>2022-08 → 2024-05</small></div><div class="tl-track"><div class="tl-bar former" style="left:32%;width:17%">已退出</div></div></div>
+    <div class="tl-row"><div class="who">MODHAUS<small>厂牌</small></div><div class="tl-track"><div class="tl-bar company" style="left:0%;width:100%">2022 → 至今</div></div></div>
+    <div class="tl-row"><div class="who">Kakao Entertainment<small>发行</small></div><div class="tl-track"><div class="tl-bar company" style="left:20%;width:80%">2023 → 至今</div></div></div>
+    <div class="tl-axis"><span>2022</span><span>2023</span><span>2024</span><span>2025</span><span>2026</span></div>
+  </div>
+</div>
+
+<script>
+  function setTheme(t) { document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light'); }
+  // 画连线
+  function drawEdges() {
+    const canvas = document.getElementById('canvas');
+    const svg = document.getElementById('edges');
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML = '';
+    const byId = {};
+    canvas.querySelectorAll('.node').forEach(n => byId[n.dataset.id] = n);
+    const edges = [
+      ['triples','aak','sub'], ['triples','kre','sub'], ['triples','evol','sub'],
+      ['triples','seoyeon','mem'], ['triples','hyerin','mem'], ['triples','jiwoo','mem'], ['triples','yuyeon','mem'], ['triples','more','mem'],
+      ['triples','modhaus','com'], ['triples','kakao','com'],
+      ['triples','generation','alb'], ['triples','assemble','alb'], ['triples','assemble24','alb'],
+      ['assemble24','gnd','sng'], ['generation','gnd','sng2'], ['gnd','gndmv','vid'],
+      ['aak','yuyeon','mem2'], ['kre','yuyeon','mem2'],
+    ];
+    const colors = { sub:'#6d5ce0', mem:'#9ca3af', mem2:'#c4b5fd', com:'#b8860b', alb:'#0e9f6e', sng:'#d0417e', sng2:'#d0417e', vid:'#4f6bed' };
+    edges.forEach(([a,b,t]) => {
+      const na = byId[a], nb = byId[b];
+      if (!na || !nb) return;
+      const x1 = na.offsetLeft, y1 = na.offsetTop, x2 = nb.offsetLeft, y2 = nb.offsetTop;
+      const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+      line.setAttribute('x1',x1); line.setAttribute('y1',y1);
+      line.setAttribute('x2',x2); line.setAttribute('y2',y2);
+      line.setAttribute('stroke', colors[t]);
+      line.setAttribute('stroke-width', t==='mem'||t==='mem2' ? 1.4 : 2);
+      if (t==='sub') line.setAttribute('stroke-dasharray','6 5');
+      if (t==='mem2') line.setAttribute('stroke-dasharray','2 4');
+      line.setAttribute('opacity', .55);
+      svg.appendChild(line);
+    });
+  }
+  // 点击节点高亮 + 面板标题联动（示意）
+  document.querySelectorAll('.node').forEach(n => {
+    n.addEventListener('click', () => {
+      document.querySelectorAll('.node').forEach(x => x.classList.remove('sel'));
+      n.classList.add('sel');
+      const panel = document.getElementById('panel');
+      panel.style.display = 'block';
+    });
+  });
+  function closePanel() {
+    document.getElementById('panel').style.display = 'none';
+    document.querySelectorAll('.node').forEach(x => x.classList.remove('sel'));
+  }
+  window.addEventListener('resize', drawEdges);
+  const q = new URLSearchParams(location.search);
+  if (q.get('theme')) setTheme(q.get('theme'));
+  drawEdges();
+</script>
+</body>
+</html>
