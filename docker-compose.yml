@@ -2,10 +2,10 @@
 # K-pop 媒体库 —— 绿联 NAS (UGOS Pro) Docker Compose 部署
 #
 # 使用方法（NAS 上不构建镜像，直接导入 tar 后 compose 启动）：
-#   1. 在开发机执行：docker build --platform linux/amd64 -t idolmatrix:3.4.9 .
-#                      docker save idolmatrix:3.4.9 -o idolmatrix-3.4.9.tar
-#   2. 将 idolmatrix-3.4.9.tar 与 docker-compose.yml、.env.nas.example 上传到 NAS
-#   3. 在 NAS 上导入镜像：docker load -i idolmatrix-3.4.9.tar
+#   1. 在开发机执行：docker build --platform linux/amd64 -t idolmatrix:3.9.6 .
+#                      docker save idolmatrix:3.9.6 -o idolmatrix-3.9.6.tar
+#   2. 将 idolmatrix-3.9.6.tar 与 docker-compose.yml、.env.nas.example 上传到 NAS
+#   3. 在 NAS 上导入镜像：docker load -i idolmatrix-3.9.6.tar
 #   4. 可选：复制 .env.nas.example 为 .env 自定义路径（不复制则用默认 /volume1/kpop/*）
 #   5. 在项目目录执行：docker compose up -d
 #   6. 浏览器打开：http://<NAS-IP>:8010
@@ -28,7 +28,7 @@
 services:
   kpop-media:
     # ★ NAS 上只认 image，禁止 build:（见文件头注释）
-    image: idolmatrix:3.6.5
+    image: idolmatrix:3.9.8
     container_name: kpop-media
     restart: unless-stopped
     ports:
@@ -69,8 +69,13 @@ services:
       #   历史配置里那行 iHD 一直是个安慰剂）。默认也不需要指定驱动名。
       #   仅在必须强制时打开下面这行（取值示例：iHD / i965 / radeonsi）：
       # LIBVA_DRIVER_NAME_JELLYFIN: iHD
-      # ★ 跨站写请求放行（全局开关）：false 严格 CSRF。
-      #   外部域名/内网穿透(节点小宝)访问报「跨站请求被拒绝 (403)」时设 true。
+      # ★ 跨域访问（推荐做法）：用隧道/外部域名访问报「跨站请求被拒绝 (403)」时，
+      #   把访问地址精确登记到 CORS_ORIGINS（逗号分隔多个），相当于"给指定域名办通行证"。
+      #   示例：CORS_ORIGINS=https://abc.example.com,https://nas.example.com
+      CORS_ORIGINS: "${CORS_ORIGINS:-}"
+      # ⚠ 最后手段（默认 false，保持严格 CSRF）：上面这个总开关一开，
+      #   所有写请求都不再检查来源——你浏览器里打开的任何恶意网页都能
+      #   冒充你操作媒体库。除非 CORS_ORIGINS 确实解决不了，否则永远别设 true。
       ALLOW_CROSS_ORIGIN_WRITES: "${ALLOW_CROSS_ORIGIN_WRITES:-false}"
     devices:
       # ★ GPU 设备透传 —— VAAPI / QSV / VCN 硬解硬编都要靠它，**厂商无关**。
