@@ -36,7 +36,12 @@ class IncomingFile(TimestampMixin, Base):
     height: Mapped[Optional[int]] = mapped_column(Integer)
     video_codec: Mapped[Optional[str]] = mapped_column(String(50))
     audio_codec: Mapped[Optional[str]] = mapped_column(String(50))
-    # 扫描时按文件名+大小对 MusicVideo 的重复提示（入库后可能过期，读侧可复核）
+    # 侧车元数据（info.json / NFO）里的平台视频身份：判重用（与 MusicVideo.source_* 同口径，
+    # 比对时双方 lower()）。NULL = 尚未读取 / 无元数据，读侧会兜底重读并回填。
+    source_platform: Mapped[Optional[str]] = mapped_column(String(50))
+    source_id: Mapped[Optional[str]] = mapped_column(String(200))
+    # 扫描时按 平台视频ID / 文件名+大小 / 大小+时长(±1秒) 对 MusicVideo 的重复提示
+    # （入库后可能过期，读侧会按当前库复核）
     is_duplicate: Mapped[bool] = mapped_column(default=False)
     # 探测成功时间；NULL=探测失败/未探测，下轮扫描重试
     probed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

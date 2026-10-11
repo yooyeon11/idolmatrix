@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from sqlalchemy import and_, desc, func, or_, select, union
+from sqlalchemy import String, and_, case, cast, desc, func, or_, select, true, union
 from sqlalchemy.orm import Session
 
 from app.models.artist import Artist
@@ -105,12 +105,29 @@ def overview(db: Session) -> dict[str, Any]:
         db.scalar(select(func.count(Photo.id)).where(Photo.deleted_at.is_(None))) or 0
     )
 
-    rows = db.execute(
-        select(MusicVideo.video_type, func.count(MusicVideo.id))
-        .where(library)
-        .group_by(MusicVideo.video_type)
+    # 类型构成按「类型计次」：一条视频可属多个类型（如 直拍×翻唱），对它携带的
+    # 每个类型各 +1 —— 主类型口径会把副类型内容藏进单一分类里。各类型计次之和
+    # 可能大于视频总数，前端有提示文案；无任何类型标签的视频落 Other（守恒兜底）。
+    type_rows = db.execute(
+        select(MusicVideo.video_type, MusicVideo.video_types).where(library)
     ).all()
-    type_breakdown = {vt or "Other": int(cnt) for vt, cnt in rows}
+    type_counts: dict[str, int] = {}
+    for primary, types in type_rows:
+        labels = (
+            [t for t in (types or []) if t]
+            if isinstance(types, list)
+            else ([primary] if primary else [])
+        )
+        if not labels:
+            labels = ["Other"]
+        seen: set[str] = set()
+        for vt in labels:
+            key = vt or "Other"
+            if key in seen:
+                continue
+            seen.add(key)
+            type_counts[key] = type_counts.get(key, 0) + 1
+    type_breakdown = type_counts
 
     # 分辨率构成：按 (width,height) 分组后在 Python 侧归档，档位少、DB 侧不用写 CASE
     res_rows = db.execute(
@@ -137,6 +154,136 @@ def overview(db: Session) -> dict[str, Any]:
         "photo_count": int(photo_count),
         "type_breakdown": type_breakdown,
         "resolution_breakdown": resolution_breakdown,
+    }
+
+
+def artist_trend(
+    db: Session,
+    *,
+    by: str = "created",
+    months: int = 12,
+    limit: int = 5,
+) -> dict[str, Any]:
+    """艺人轨迹（实验性）：主体 × 月份的入库条数，供堆叠柱与热度榜。
+
+    by=created 按入库时间归月（datetime localtime，与热力图同口径）；
+    by=performance 按 performance_date 归月，无表演日期的视频不计入（返回覆盖率）。
+    主体 = 艺人 ∪ 组合（合作视频计入各相关主体）；短视频不计（与排行口径一致）。
+    """
+    from datetime import date
+
+    from app.models.artist import Artist
+    from app.models.group import Group
+
+    by = by if by in ("created", "performance") else "created"
+    months = max(3, min(int(months or 12), 36))
+    limit = max(1, min(int(limit or 5), 10))
+
+    today = date.today()
+    keys: list[str] = []
+    y, m = today.year, today.month
+    for _ in range(months):
+        keys.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    keys.reverse()
+    # 边界与 bucket 同为 7 位 YYYY-MM:拼成 10 位再比会因字典序漏月
+    # （"2026-09" <= "2026-10-31" 为 False），10 月窗口会滤掉 9 月的数据
+    start = keys[0]
+    end = keys[-1]
+
+    if by == "performance":
+        bucket = func.substr(cast(MusicVideo.performance_date, String), 1, 7)
+        extra = MusicVideo.performance_date.is_not(None)
+    else:
+        bucket = func.substr(func.datetime(MusicVideo.created_at, "localtime"), 1, 7)
+        extra = true()
+
+    library = and_(MusicVideo.deleted_at.is_(None), MusicVideo.ingestion_status == "library")
+    not_short = or_(MusicVideo.is_short.is_(False), MusicVideo.is_short.is_(None))
+
+    def _counts(kind: str) -> dict[tuple[int, str], int]:
+        if kind == "artist":
+            sid = music_video_artists.c.artist_id
+            join_to = (music_video_artists, music_video_artists.c.music_video_id == MusicVideo.id)
+        else:
+            sid = music_video_groups.c.group_id
+            join_to = (music_video_groups, music_video_groups.c.music_video_id == MusicVideo.id)
+        rows = db.execute(
+            select(sid.label("sid"), bucket.label("ym"), func.count().label("cnt"))
+            .select_from(MusicVideo)
+            .join(*join_to)
+            .where(library, not_short, extra, bucket >= start, bucket <= end)
+            .group_by(sid, "ym")
+        ).all()
+        return {(int(r.sid), str(r.ym)): int(r.cnt) for r in rows}
+
+    counts = _counts("artist")
+    gcounts = _counts("group")
+
+    subjects: dict[tuple[str, int], dict[str, Any]] = {}
+    for kind, source in (("artist", counts), ("group", gcounts)):
+        for (sid, ym), cnt in source.items():
+            entry = subjects.setdefault((kind, sid), {"total": 0, "months": {}})
+            entry["total"] += cnt
+            entry["months"][ym] = entry["months"].get(ym, 0) + cnt
+
+    def _name(kind: str, sid: int) -> str:
+        obj = db.get(Artist if kind == "artist" else Group, sid)
+        if obj is None:
+            return f"#{sid}"
+        if kind == "artist":
+            return obj.stage_name or obj.chinese_name or obj.name
+        return obj.chinese_name or obj.name
+
+    def _uid(kind: str, sid: int) -> Optional[str]:
+        obj = db.get(Artist if kind == "artist" else Group, sid)
+        return getattr(obj, "uid", None) if obj is not None else None
+
+    ranked = sorted(subjects.items(), key=lambda kv: kv[1]["total"], reverse=True)
+    top = ranked[:limit]
+    tail = ranked[limit:]
+
+    def _series(kind: str, sid: int, name: str, months_map: dict[str, int]) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "id": sid,
+            "name": name,
+            "uid": _uid(kind, sid),
+            "data": [months_map.get(k, 0) for k in keys],
+        }
+
+    series = []
+    for (kind, sid), entry in top:
+        name = _name(kind, sid)
+        if any(s["name"] == name for s in series):
+            name = f"{name}（{'组合' if kind == 'group' else '艺人'}）"
+        series.append(_series(kind, sid, name, entry["months"]))
+    if tail:
+        other_months = {k: 0 for k in keys}
+        for _, entry in tail:
+            for ym, cnt in entry["months"].items():
+                other_months[ym] = other_months.get(ym, 0) + cnt
+        series.append({"kind": "other", "id": None, "name": "其他", "uid": None, "data": [other_months.get(k, 0) for k in keys]})
+
+    coverage = None
+    if by == "performance":
+        total = db.scalar(select(func.count(MusicVideo.id)).where(library, not_short)) or 0
+        with_date = db.scalar(
+            select(func.count(MusicVideo.id)).where(library, not_short, MusicVideo.performance_date.is_not(None))
+        ) or 0
+        coverage = {"with_date": int(with_date), "total": int(total)}
+
+    # 热度榜基准月 = 最近一个完整月（当月未结束，剔除）
+    heat_month = keys[-2] if len(keys) >= 2 else None
+
+    return {
+        "by": by,
+        "months": keys,
+        "series": series,
+        "heat_month": heat_month,
+        "coverage": coverage,
     }
 
 
@@ -430,6 +577,21 @@ def recap(db: Session) -> dict[str, Any]:
             clock[h] = int(r.c)
     peak_hour = clock.index(max(clock)) if any(clock) else None
 
+    # ---- 2b. 观看星期分布(同一批观看记录,localtime 星期归组;Mon=0 … Sun=6)----
+    # SQLite strftime 无 %u(ISO 星期),用 %w(0=Sunday)换算:idx = (w + 6) % 7
+    weekday_rows = db.execute(
+        select(
+            func.strftime("%w", WatchPlay.started_at, "localtime").label("w"),
+            func.count(WatchPlay.id).label("c"),
+        ).group_by("w")
+    ).all()
+    weekdays = [0] * 7
+    for r in weekday_rows:
+        w = int(r.w)
+        if 0 <= w <= 6:
+            weekdays[(w + 6) % 7] = int(r.c)  # %w: 0=Sunday → 周一=下标 0
+    peak_weekday = weekdays.index(max(weekdays)) if any(weekdays) else None
+
     # ---- 3. 馆藏之最：第一支 / 时长最长 / 体积最大 ----
     first = _recap_record(
         db.execute(
@@ -484,6 +646,8 @@ def recap(db: Session) -> dict[str, Any]:
         "heatmap": heatmap,
         "clock": [{"hour": h, "count": c} for h, c in enumerate(clock)],
         "clock_peak_hour": peak_hour,
+        "weekdays": [{"weekday": w, "count": c} for w, c in enumerate(weekdays)],
+        "peak_weekday": peak_weekday,
         "records": {"first": first, "longest": longest, "largest": largest},
         "monthly": monthly,
     }

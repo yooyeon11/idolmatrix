@@ -119,8 +119,8 @@ def ai_suggest_endpoint(
         match_mode=read_ingest_match_mode(db),
         group_ids=seed_groups,
     )
-    # 中文简介规则：设置页自定义 > 后端内置默认（原版自由口径）
-    desc_rule = app_settings.read_all(db).ingest_ai.desc_prompt
+    # 提示词规则：设置页自定义 > 后端内置默认（中文简介默认原版自由口径；标题默认原版规范）
+    ingest_ai = app_settings.read_all(db).ingest_ai
     try:
         result = suggest_ingest(
             fill_saved_ai_cfg(payload.model_dump()),
@@ -128,7 +128,7 @@ def ai_suggest_endpoint(
             current,
             library_context=library_context,
             aux_notes=payload.aux_notes,
-            system_prompt=build_system_prompt(desc_rule),
+            system_prompt=build_system_prompt(ingest_ai.desc_prompt, ingest_ai.title_prompt),
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

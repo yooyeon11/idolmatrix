@@ -70,7 +70,19 @@ def list_artists(
             | Artist.stage_name.ilike(like)
         )
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    if sort == "completion":
+    if sort == "name":
+        stmt = stmt.order_by(
+            func.coalesce(Artist.chinese_name, Artist.stage_name, Artist.name)
+            .collate("NOCASE")
+            .asc()
+        )
+    elif sort == "-name":
+        stmt = stmt.order_by(
+            func.coalesce(Artist.chinese_name, Artist.stage_name, Artist.name)
+            .collate("NOCASE")
+            .desc()
+        )
+    elif sort == "completion":
         stmt = stmt.order_by(completion.asc())
     elif sort == "-completion":
         stmt = stmt.order_by(completion.desc())

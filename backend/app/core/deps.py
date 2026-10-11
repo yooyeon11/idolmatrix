@@ -6,10 +6,14 @@ import re
 from dataclasses import dataclass
 from typing import Annotated, Optional
 
+import hmac
+
 from fastapi import Depends, HTTPException, Query, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.user import User
 from app.core.security import COOKIE_NAME, hash_token
 from app.services.auth_service import (
     AuthError,
@@ -41,7 +45,26 @@ _TOUCH_SKIP = (
 )
 
 
+# ===== 外部集成 Token（workbuddy 等）=====
+# 覆盖「库内容管理」路由：待整理/入库、视频与资料库编辑、评分回写。
+# 刻意不覆盖：设置(app-settings)、账号(auth)、系统(system)、上传器/外部服务等 ——
+# Token 只管内容,不管配置与账号。
+_TOKEN_API_RE = (
+    re.compile(r"^/api/library(/.*)?$"),
+    re.compile(r"^/api/music-videos(/.*)?$"),
+    re.compile(r"^/api/(artists|groups|songs|albums)(/.*)?$"),
+    re.compile(r"^/api/video-collections(/.*)?$"),
+)
+
+
+def is_token_route(path: str) -> bool:
+    return any(p.match(path) for p in _TOKEN_API_RE)
+
+
 def is_public(method: str, path: str) -> bool:
+    # ⚠ Token 路由绝不能进这里：is_public = 完全免鉴权。Token 路由的放行
+    # 只发生在「请求带了 X-API-Token 头」时（中间件跳过会话/CSRF），
+    # 且凭据校验始终在 require_login 的 token 分支执行。
     return (method.upper(), path) in PUBLIC_EXACT
 
 
@@ -96,11 +119,46 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> Current
     return user
 
 
+def get_external_principal(db: Session, token: str) -> CurrentUser:
+    """校验外部集成 Token,返回主账号身份(审计日志归到主账号名下)。
+
+    Token 在设置页生成(存 app_settings.external_api);未配置 = 外部写入整体关闭。
+    """
+    from app.services import app_settings as app_settings_service
+
+    expected = (app_settings_service.read_all(db).external_api.token or "").strip()
+    if not expected:
+        raise HTTPException(403, "外部集成 Token 未启用（设置 · AI 设置 · 视频评分）")
+    provided = (token or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(401, "X-API-Token 缺失或不正确")
+    user = db.scalar(
+        select(User)
+        .where(User.deleted_at.is_(None), User.is_active.is_(True))
+        .order_by(User.id)
+        .limit(1)
+    )
+    if user is None:
+        raise HTTPException(403, "无可用账号")
+    return CurrentUser(
+        id=user.id,
+        uid=user.uid,
+        username=user.username,
+        display_name=user.display_name or user.username,
+        role=user.role,
+        auth_session_pk=0,  # 外部 Token 无会话行
+    )
+
+
 def require_login(
     request: Request, db: Session = Depends(get_db)
 ) -> Optional[CurrentUser]:
     if is_public(request.method, request.url.path) or auth_is_off():
         return getattr(request.state, "current_user", None)
+    # 外部集成 Token：库内容管理路由的替代凭据(不创建会话,不挤占 Web 登录)
+    token_header = (request.headers.get("x-api-token") or "").strip()
+    if token_header and is_token_route(request.url.path):
+        return get_external_principal(db, token_header)
     return get_current_user(request, db)
 
 

@@ -93,6 +93,13 @@ class RecapDay(ORMModel):
     count: int = 0
 
 
+class RecapWeekday(ORMModel):
+    """观看星期分布项：weekday 0=周一 … 6=周日。"""
+
+    weekday: int
+    count: int
+
+
 class RecapHour(ORMModel):
     """观看时钟单小时。"""
 
@@ -126,3 +133,6 @@ class StatsRecap(ORMModel):
     clock_peak_hour: Optional[int] = None
     records: Dict[str, Optional[RecapRecord]] = {}
     monthly: List[RecapMonth] = []
+    # 观看星期分布(Mon=0 … Sun=6)与最活跃星期
+    weekdays: List[RecapWeekday] = []
+    peak_weekday: Optional[int] = None

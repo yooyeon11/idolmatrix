@@ -9,21 +9,28 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 
+import hmac
+
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload, object_session, selectinload
 
 from app.api.guards import require_active
 from app.core.config import settings
 from app.core.deps import DbDep, PaginationDep
+from app.core.ffmpeg import FFmpegNotFoundError, require_ffmpeg
 from app.services.soft_delete_service import soft_delete_music_video
+from app.services import video_scoring_service
+from app.services import video_chapters_service
 from app.media.ffmpeg import FFmpegError
 from app.models.album import AlbumTrack
 from app.models.artist import Artist
@@ -56,7 +63,11 @@ from app.schemas import (
     VideoRelocateResult,
 )
 from app.services.derived_http import serve_derived_image
-from app.services.file_service import COVER_EXTENSIONS, find_sidecar_cover
+from app.services.file_service import (
+    COVER_EXTENSIONS,
+    find_sidecar_cover,
+    find_sidecar_subtitles,
+)
 from app.services.img_variant import VIDEO_THUMB_CACHE_DIRNAME, resized_variant
 from app.services.library_service import (
     ArtistDirNameConflict,
@@ -170,6 +181,32 @@ def _resolve_file_path(mv: MusicVideo) -> Path:
         raise HTTPException(404, "视频文件路径缺失")
     return p
 
+def _fill_participants(mv: MusicVideo) -> None:
+    """把 participants 里的库内艺人 id 解析成展示所需数据(uid/头像/当前名)。
+
+    存储形态 [{id?: int, name: str}]:name 是选择时的快照;艺人仍在库时补充
+    uid/头像并刷新为当前名,已删除则保留快照名(不阻断展示)。
+    """
+    parts = getattr(mv, "participants", None) or []
+    if not parts:
+        return
+    ids = [int(p["id"]) for p in parts if isinstance(p, dict) and p.get("id")]
+    artists: dict[int, Artist] = {}
+    if ids:
+        session = object_session(mv)
+        if session is not None:
+            for a in session.scalars(select(Artist).where(Artist.id.in_(ids))).all():
+                artists[a.id] = a
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        a = artists.get(p.get("id"))
+        if a is not None and a.deleted_at is None:
+            p["uid"] = a.uid
+            p["avatar_path"] = a.avatar_path
+            p["name"] = a.chinese_name or a.name
+
+
 def _fill_relations(mv: MusicVideo) -> None:
     """把已 joinedload 的 song/subject_artist 名称回填到 ORM 对象上，
     便于 Pydantic from_attributes 直接序列化为 MusicVideoRead/Brief 的关联字段。
@@ -259,6 +296,10 @@ def _build_sort_order(sort: Optional[str]):
         return (MusicVideo.published_date.is_(None), MusicVideo.published_date.desc())
     if sort == "published_date_asc":
         return (MusicVideo.published_date.is_(None), MusicVideo.published_date.asc())
+    if sort == "size_desc":
+        return (MusicVideo.file_size.is_(None), MusicVideo.file_size.desc())
+    if sort == "size_asc":
+        return (MusicVideo.file_size.is_(None), MusicVideo.file_size.asc())
     return (MusicVideo.created_at.desc(),)
 
 
@@ -350,6 +391,7 @@ def list_videos(
     )
     for mv in items:
         _fill_relations(mv)
+        _fill_participants(mv)
     return PageResponse(
         items=[_to_read(mv) for mv in items],
         total=total,
@@ -377,7 +419,329 @@ def list_brief(
     items = db.scalars(stmt.order_by(MusicVideo.created_at.desc()).limit(limit)).all()
     for mv in items:
         _fill_relations(mv)
+        _fill_participants(mv)
     return items
+
+
+def _parse_id_csv(raw: Optional[str]) -> list[int]:
+    """逗号分隔 id 串 → int 列表（非法片段静默忽略）。"""
+    if not raw:
+        return []
+    return [int(p) for p in (s.strip() for s in raw.split(",")) if p.isdigit()]
+
+
+@router.get("/feed", response_model=list[MusicVideoRead])
+def random_shorts_feed(
+    db: DbDep,
+    count: int = Query(10, ge=1, le=50),
+    exclude_ids: Optional[str] = Query(
+        None, description="逗号分隔的视频 id：本会话已刷过，不再返回"
+    ),
+):
+    """随机短视频 feed（刷模式）。
+
+    池子与短视频页同口径：library + is_short；ORDER BY RANDOM() 取 count 条，
+    exclude_ids 用于会话内去重（前端每批上报已刷过的 id）。
+    返回空 = 池子刷穿，由前端提示「重新洗牌」。
+    """
+    maybe_cleanup_missing_videos(db)
+    stmt = (
+        select(MusicVideo)
+        .options(*_relations_options())
+        .where(MusicVideo.deleted_at.is_(None))
+    )
+    stmt = stmt.where(MusicVideo.ingestion_status == "library")
+    stmt = _filter_is_short(stmt, True)
+    seen = _parse_id_csv(exclude_ids)
+    if seen:
+        stmt = stmt.where(~MusicVideo.id.in_(seen))
+    items = db.scalars(stmt.order_by(func.random()).limit(count)).all()
+    for mv in items:
+        _fill_relations(mv)
+        _fill_participants(mv)
+    return [_to_read(mv) for mv in items]
+
+
+@router.get("/{mv_id}/chapters")
+def get_video_chapters(mv_id: int, db: DbDep):
+    """视频章节（实验性，只读推导）：内嵌章节优先，简介时间轴兜底。"""
+    mv = _get_active(db, mv_id)
+    if not mv:
+        raise HTTPException(404, "MusicVideo 不存在")
+    _fill_relations(mv)
+    items = video_chapters_service.get_chapters(mv)
+    return {"count": len(items), "items": items}
+
+
+# ===== 外挂同名字幕（播放器字幕轨）=====
+# 浏览器 <track> 只认 WebVTT，因此统一转成 VTT 出流：
+# .vtt 原样、.srt 纯文本转换、.ass/.ssa 经 ffmpeg 转（保留文本与时间轴，丢特效样式）；
+# .sub/.sup/.idx 是图形字幕，转不成文本轨，随视频归档但不进播放列表。
+
+
+_SUB_RASTER_EXTS = {".sub", ".sup", ".idx"}
+
+
+def _renderable_subtitles(video: Path) -> list[Path]:
+    """可进播放器的同名字幕（文本类），按文件名排序保证 index 寻址稳定。"""
+    return [
+        p
+        for p in find_sidecar_subtitles(video)
+        if p.suffix.lower() not in _SUB_RASTER_EXTS
+    ]
+
+
+def _decode_text(raw: bytes) -> str:
+    for enc in ("utf-8-sig", "cp936"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _srt_to_vtt(text: str) -> str:
+    """SRT → WebVTT：补 WEBVTT 头，时间戳毫秒分隔逗号改点（SRT 缺少的话
+    浏览器会把整个 cue 丢弃，这里不做字幕序号清理 —— WebVTT 对多余行宽容）。"""
+    out = ["WEBVTT", ""]
+    for line in text.splitlines():
+        if "-->" in line:
+            line = line.replace(",", ".")
+        out.append(line)
+    return "\n".join(out).strip() + "\n"
+
+
+_VTT_TIME_RE = re.compile(r"(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})")
+
+
+def _shift_vtt_timestamps(text: str, offset: float) -> str:
+    """把 VTT 时间戳整体平移 offset 秒。
+
+    转码窗口的流内时间 = 片源绝对时间 - window_start，而 <track> 的调度
+    跟随 video.currentTime（流内时间）—— 不平移的话字幕会早 offset 秒出现。
+    """
+
+    def shift(m: re.Match[str]) -> str:
+        total = (
+            int(m.group(1)) * 3600
+            + int(m.group(2)) * 60
+            + int(m.group(3))
+            + offset
+        )
+        if total < 0:
+            total = 0
+        h, rem = divmod(total, 3600)
+        mi, s = divmod(rem, 60)
+        return f"{int(h):02d}:{int(mi):02d}:{int(s):02d}.{m.group(4)}"
+
+    return _VTT_TIME_RE.sub(shift, text) if offset > 0 else text
+
+
+def _ass_to_vtt_text(sub: Path, mv_id: int, index: int) -> str:
+    """ass/ssa 经 ffmpeg 转 vtt，按「mv id + 序号 + 源 mtime」缓存到 derived。"""
+    cache_dir = settings.derived_dir / "subtitles"
+    stamp = int(sub.stat().st_mtime)
+    cache = cache_dir / f"{mv_id}-{index}-{stamp}{sub.suffix.lower()}.vtt"
+    if cache.is_file():
+        return _decode_text(cache.read_bytes())
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        ffmpeg = require_ffmpeg()
+        subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-i", str(sub), "-f", "webvtt", str(cache)],
+            check=True,
+            timeout=30,
+            capture_output=True,
+        )
+    except (FFmpegNotFoundError, subprocess.SubprocessError, OSError) as e:
+        raise HTTPException(500, "该字幕格式（ass/ssa）需要 ffmpeg 转换，当前环境不可用") from e
+    return _decode_text(cache.read_bytes())
+
+
+def _subtitle_label(video: Path, sub: Path) -> tuple[str, str]:
+    """(展示名, 语言码)：取视频 stem 之后的中间段（.zh / .default / ''）。"""
+    labels = {
+        "zh": "中文",
+        "zh-hans": "简中",
+        "zh-hant": "繁中",
+        "chs": "简中",
+        "cht": "繁中",
+        "cn": "简中",
+        "gb": "简中",
+        "big5": "繁中",
+        "en": "英文",
+        "eng": "英文",
+        "kor": "韩语",
+        "ko": "韩语",
+        "jpn": "日语",
+        "ja": "日语",
+        "default": "默认",
+    }
+    mid = sub.stem[len(video.stem):].lstrip(".").lower()
+    lang = mid or "zh"
+    text = labels.get(mid) or (mid.upper() if mid else "")
+    return (text or "字幕", lang)
+
+
+@router.get("/{mv_id}/subtitles")
+def list_video_subtitles(mv_id: int, db: DbDep):
+    """外挂同名字幕轨列表（仅文本类：vtt/srt/ass/ssa），url 直出已转好的 VTT。"""
+    mv = _get_active(db, mv_id)
+    if not mv:
+        raise HTTPException(404, "MusicVideo 不存在")
+    video = resolve_video_abs_path(mv)
+    subs = _renderable_subtitles(video) if video is not None else []
+    items = []
+    for idx, sub in enumerate(subs):
+        label, lang = _subtitle_label(video, sub)
+        items.append(
+            {
+                "index": idx,
+                "label": label,
+                "language": lang,
+                "url": f"/api/music-videos/{mv_id}/subtitles/{idx}.vtt",
+                "default": ".default" in sub.stem.lower(),
+            }
+        )
+    return {"items": items}
+
+
+@router.get("/{mv_id}/subtitles/{name}")
+def get_video_subtitle(
+    mv_id: int,
+    name: str,
+    db: DbDep,
+    offset: float = Query(0.0, ge=0, description="时间轴平移秒数（转码 window_start）"),
+):
+    """单条字幕的 VTT 出流；offset 供转码播放平移时间轴。index 寻址防文件名注入。"""
+    mv = _get_active(db, mv_id)
+    if not mv:
+        raise HTTPException(404, "MusicVideo 不存在")
+    if not name.endswith(".vtt"):
+        raise HTTPException(404, "字幕地址无效")
+    try:
+        index = int(name[: -len(".vtt")])
+    except ValueError:
+        raise HTTPException(404, "字幕地址无效") from None
+    video = resolve_video_abs_path(mv)
+    subs = _renderable_subtitles(video) if video is not None else []
+    if index < 0 or index >= len(subs):
+        raise HTTPException(404, "字幕不存在")
+    sub = subs[index]
+    try:
+        if sub.suffix.lower() == ".srt":
+            text = _shift_vtt_timestamps(_srt_to_vtt(_decode_text(sub.read_bytes())), offset)
+        elif sub.suffix.lower() == ".ass" or sub.suffix.lower() == ".ssa":
+            text = _shift_vtt_timestamps(_ass_to_vtt_text(sub, mv.id, index), offset)
+        else:
+            text = _shift_vtt_timestamps(_decode_text(sub.read_bytes()), offset)
+    except OSError as e:
+        raise HTTPException(404, f"字幕读取失败: {e}") from e
+    return Response(
+        content=text,
+        media_type="text/vtt; charset=utf-8",
+        headers={"Cache-Control": COVER_CACHE_CONTROL},
+    )
+
+
+class AiScoreRequest(BaseModel):
+    """AI 评分请求：评分 AI 凭据由前端随请求带来（与入库 AI 同模式）。
+
+    frames_mode: auto=按时长自适应（6~16 帧）；8/12/16=固定档位。
+    """
+
+    provider: str = "openai-compatible"
+    base_url: str = ""
+    api_key: Optional[str] = None
+    model: str = ""
+    frames_mode: str = "auto"
+
+
+@router.post("/{mv_id}/ai-score")
+def run_ai_score(mv_id: int, payload: AiScoreRequest, db: DbDep):
+    """对单个视频执行 AI 评分（实验功能）：抽帧 → 视觉模型 → 落库。"""
+    mv = _get_active(db, mv_id)
+    creds = {
+        "provider": payload.provider,
+        "base_url": payload.base_url,
+        "model": payload.model,
+    }
+    if payload.api_key:
+        creds["api_key"] = payload.api_key
+    try:
+        row = video_scoring_service.score_video(db, mv, creds, frames_mode=payload.frames_mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"评分失败: {e}") from e
+    return _score_payload(row)
+
+
+@router.get("/{mv_id}/ai-score")
+def get_ai_score(mv_id: int, db: DbDep):
+    """取某视频最近一次 AI 评分（无则 null）。"""
+    _get_active(db, mv_id)
+    row = video_scoring_service.latest_score(db, mv_id)
+    return _score_payload(row) if row is not None else None
+
+
+class AiScoreResultRequest(BaseModel):
+    """外部系统提交的评分结果（workbuddy 等）：dims 兼容整数或 {score, reason}。"""
+
+    model: str
+    dims: dict
+    comment: str = ""
+    frames: int = 0
+    note: str = ""
+
+
+def _external_token(db: DbDep) -> str:
+    from app.services import app_settings as app_settings_service
+
+    read = app_settings_service.read_all(db)
+    return (read.external_api.token or "").strip()
+
+
+@router.post("/{mv_id}/ai-score/result")
+def submit_ai_score_result(
+    mv_id: int, payload: AiScoreResultRequest, request: Request, db: DbDep
+):
+    """外部写入评分结果。免浏览器会话；须带 X-API-Token 头（设置页生成）。
+
+    该路径在 deps.is_public 白名单内（中间件跳过会话/CSRF），鉴权在这里自验。
+    """
+    expected = _external_token(db)
+    if not expected:
+        raise HTTPException(403, "未配置外部写入 Token（设置 · AI 设置 · 视频评分）")
+    provided = (request.headers.get("x-api-token") or "").strip()
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(401, "X-API-Token 缺失或不正确")
+    mv = _get_active(db, mv_id)
+    try:
+        row = video_scoring_service.store_external_score(
+            db,
+            mv,
+            model=payload.model,
+            dims_raw=payload.dims,
+            comment=payload.comment,
+            frames=payload.frames,
+            note=payload.note,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _score_payload(row)
+
+
+def _score_payload(row) -> dict:
+    return {
+        "id": row.id,
+        "music_video_id": row.music_video_id,
+        "model": row.model,
+        "dims": row.dims,
+        "comment": row.comment,
+        "frames": row.frames,
+        "scored_at": row.scored_at.isoformat() if row.scored_at else None,
+    }
 
 
 def _ilike_any(model, like: str, *fields: str):
@@ -582,6 +946,7 @@ def get_video_by_uid(uid: str, db: DbDep):
     if not mv:
         raise HTTPException(404, "MusicVideo 不存在")
     _fill_relations(mv)
+    _fill_participants(mv)
     return _to_read(mv)
 
 @router.post("", response_model=MusicVideoRead, status_code=201)
@@ -628,6 +993,7 @@ def get_video(mv_id: int, db: DbDep):
     if not mv:
         raise HTTPException(404, "MusicVideo 不存在")
     _fill_relations(mv)
+    _fill_participants(mv)
     return _to_read(mv)
 
 @router.patch("/{mv_id}", response_model=MusicVideoRead)
@@ -674,6 +1040,7 @@ def update_video(mv_id: int, payload: MusicVideoUpdate, db: DbDep):
     # 重新加载关联，便于返回时填充名称
     mv = _get_active(db, mv_id)
     _fill_relations(mv)
+    _fill_participants(mv)
     return _to_read(mv)
 
 @router.get("/{mv_id}/path-suggestion", response_model=VideoPathSuggestion)

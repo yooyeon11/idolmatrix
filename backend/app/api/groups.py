@@ -44,8 +44,8 @@ def list_groups(
     sort: Optional[str] = Query(None, description="排序：completion=完成度升序，-completion=降序"),
     filter: str = Query(
         "all",
-        pattern="^(all|linked|orphan)$",
-        description="数据过滤：all=全部；linked=有视频或有成员；orphan=无视频且无成员（孤儿数据）",
+        pattern="^(all|videos|linked|orphan)$",
+        description="数据过滤：all=全部；videos=有视频直接关联（被翻唱的原唱不算）；linked=有视频或有成员；orphan=无视频且无成员",
     ),
 ):
     completion = group_completion_pct()
@@ -63,7 +63,10 @@ def list_groups(
         GroupMembership.group_id.is_not(None)
     )
     stmt = select(Group, completion.label("completion_pct")).where(Group.active_filter())
-    if filter == "linked":
+    if filter == "videos":
+        # 仅直连表演关联（music_video_groups）：被翻唱的原唱不算「有关联」
+        stmt = stmt.where(Group.id.in_(video_group_ids))
+    elif filter == "linked":
         stmt = stmt.where(
             or_(Group.id.in_(video_group_ids), Group.id.in_(member_group_ids))
         )
@@ -85,6 +88,10 @@ def list_groups(
         stmt = stmt.order_by(completion.asc())
     elif sort == "-completion":
         stmt = stmt.order_by(completion.desc())
+    elif sort == "name":
+        stmt = stmt.order_by(func.coalesce(Group.chinese_name, Group.name).collate("NOCASE").asc())
+    elif sort == "-name":
+        stmt = stmt.order_by(func.coalesce(Group.chinese_name, Group.name).collate("NOCASE").desc())
     else:
         stmt = stmt.order_by(Group.sort_name.asc().nulls_last())
     rows = db.execute(

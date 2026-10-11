@@ -30,7 +30,6 @@ class AiSuggestResult(ORMModel):
     video_types: Optional[list[str]] = None
     event_name: Optional[str] = None
     performance_date: Optional[str] = None
-    subject_artist_name: Optional[str] = None
     # 是否为 solo 表演（布尔值），AI 判断后供自动整理入库使用
     is_solo: Optional[bool] = None
     # 中文简介：由 AI 根据视频内容生成（原 description 保留来源原文，不入库建议）

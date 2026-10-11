@@ -75,6 +75,36 @@ def _song_video_counts(db: DbDep, song_ids: List[int]) -> dict[int, int]:
     return {sid: len(vids) for sid, vids in pairs.items()}
 
 
+def _song_video_count_subq():
+    """按歌计关联视频数的标量子查询（三路 UNION 去重，排除软删与短视频）。
+
+    与 _linked_song_ids_subq 同口径，供「按视频数排序」使用；挂在 Song 上逐行求值。
+    """
+    active = MusicVideo.deleted_at.is_(None)
+    not_short = MusicVideo.is_short.is_not(True)
+    direct = select(MusicVideo.song_id.label("sid"), MusicVideo.id.label("vid")).where(
+        active, not_short, MusicVideo.song_id.is_not(None)
+    )
+    m2m = (
+        select(music_video_songs.c.song_id.label("sid"), music_video_songs.c.music_video_id.label("vid"))
+        .join(MusicVideo, MusicVideo.id == music_video_songs.c.music_video_id)
+        .where(active, not_short, music_video_songs.c.song_id.is_not(None))
+    )
+    via_track = (
+        select(MusicVideoTrack.song_id.label("sid"), MusicVideoTrack.music_video_id.label("vid"))
+        .join(MusicVideo, MusicVideo.id == MusicVideoTrack.music_video_id)
+        .where(active, not_short, MusicVideoTrack.song_id.is_not(None))
+    )
+    union_sub = direct.union(m2m, via_track).subquery()
+    return (
+        select(func.count())
+        .select_from(union_sub)
+        .where(union_sub.c.sid == Song.id)
+        .correlate(Song)
+        .scalar_subquery()
+    )
+
+
 def _linked_song_ids_subq():
     """有关联视频的歌曲 id 并集（直接关联 / M2M / 曲目行三种口径，排除软删与短视频）。
 
@@ -145,7 +175,10 @@ def list_songs(
     artist_id: Optional[int] = Query(None, description="按发行/关联艺人筛选"),
     group_id: Optional[int] = Query(None, description="按发行/关联组合筛选"),
     album_id: Optional[int] = Query(None, description="按所属专辑筛选"),
-    sort: Optional[str] = Query(None, description="排序：completion=完成度升序，-completion=降序"),
+    sort: Optional[str] = Query(
+        None,
+        description="排序：completion=完成度升序，-completion=降序，videos_desc=视频数多→少，videos_asc=少→多，name=名称A→Z，-name=Z→A",
+    ),
     only_with_videos: bool = Query(False, description="仅显示有关联视频（未软删除、非短视频）的歌曲"),
     filter: str = Query(
         "all",
@@ -192,7 +225,16 @@ def list_songs(
             )
         )
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    if sort == "completion":
+    video_cnt = _song_video_count_subq()
+    if sort == "videos_desc":
+        stmt = stmt.order_by(video_cnt.desc(), Song.name.asc())
+    elif sort == "videos_asc":
+        stmt = stmt.order_by(video_cnt.asc(), Song.name.asc())
+    elif sort == "name":
+        stmt = stmt.order_by(func.coalesce(Song.chinese_name, Song.name).collate("NOCASE").asc())
+    elif sort == "-name":
+        stmt = stmt.order_by(func.coalesce(Song.chinese_name, Song.name).collate("NOCASE").desc())
+    elif sort == "completion":
         stmt = stmt.order_by(completion.asc())
     elif sort == "-completion":
         stmt = stmt.order_by(completion.desc())

@@ -32,6 +32,9 @@ class IngestAiSettings(ORMModel):
     # 视频中文简介（chinese_description）规则的自定义提示词；为空时用后端内置默认
     # （默认 = 原版自由口径，见 ai_service.DEFAULT_DESC_RULE），可在 AI 设置页编辑 / 恢复默认
     desc_prompt: str = ""
+    # 主标题（name）规范的自定义提示词；为空时用后端内置默认
+    # （默认 = 原版「YYMMDD Artist - Song [Event Name Type]」口径，见 ai_service.DEFAULT_TITLE_RULE）
+    title_prompt: str = ""
     # 仅 GET 回读：是否已保存密钥（明文不返回）
     api_key_set: bool = False
 
@@ -62,6 +65,14 @@ class TmdbSettings(ORMModel):
     api_key_set: bool = False
 
 
+class YoutubeSettings(ORMModel):
+    # YouTube Data API v3：博主缺失视频检测的数据来源
+    enabled: bool = False
+    # Google Cloud Console 申请的 API Key（默认每日 1 万 quota）
+    api_key: str = ""
+    api_key_set: bool = False
+
+
 # 「放行跨站写请求」（原 NetworkSecuritySettings.allow_cross_origin_writes）已从产品设置层移除：
 # 设置页不再有开关，DB 也再无 network 分区 —— 缺省即严格 CSRF 校验。
 # 部署层后路仍保留：环境变量 ALLOW_CROSS_ORIGIN_WRITES（见 core/config.py 与 docker-compose.yml）。
@@ -80,12 +91,19 @@ class UploaderRule(ORMModel):
 
     命中的上传人（original_uploader，逐字比对，忽略首尾空白与大小写）在待整理 /
     入库时直接采用 video_types，不再由 AI 判断类型；未命中或未配置的博主仍交给 AI。
+
+    youtube_channel_url / missing_check_enabled：博主缺失视频检测配置（2026-09 起）。
+    填了频道地址并开启检测的博主，可在博主页拉取频道完整投稿列表做缺失比对。
     """
 
     # 博主名 = 视频来源上传人（original_uploader）
     name: str = ""
     # 固定视频类型（VIDEO_TYPES 子集，至少一个；为空视为不生效）
     video_types: List[str] = []
+    # YouTube 频道地址 / ID（@handle、/channel/UC… 链接或裸 UC ID 均可）
+    youtube_channel_url: str = ""
+    # 是否启用缺失视频检测（针对部分博主 opt-in）
+    missing_check_enabled: bool = False
 
 
 class UploaderRulesSettings(ORMModel):
@@ -114,6 +132,12 @@ class AppearanceSettings(ORMModel):
     home_hero_image: str = "avatar"
 
 
+class ExternalApiSettings(ORMModel):
+    """外部系统集成（实验：AI 评分结果写入）。token 为空 = 未启用。"""
+
+    token: str = ""
+
+
 class AppSettingsRead(ORMModel):
     appearance: AppearanceSettings = AppearanceSettings()
     hero: HeroSettings = HeroSettings()
@@ -121,7 +145,9 @@ class AppSettingsRead(ORMModel):
     mtphotos: MtPhotosSettings = MtPhotosSettings()
     external_proxy: ExternalProxySettings = ExternalProxySettings()
     tmdb: TmdbSettings = TmdbSettings()
+    youtube: YoutubeSettings = YoutubeSettings()
     uploader_rules: UploaderRulesSettings = UploaderRulesSettings()
+    external_api: ExternalApiSettings = ExternalApiSettings()
 
 
 class AppSettingsPatch(ORMModel):
@@ -131,7 +157,9 @@ class AppSettingsPatch(ORMModel):
     mtphotos: Optional[MtPhotosSettings] = None
     external_proxy: Optional[ExternalProxySettings] = None
     tmdb: Optional[TmdbSettings] = None
+    youtube: Optional[YoutubeSettings] = None
     uploader_rules: Optional[UploaderRulesSettings] = None
+    external_api: Optional[ExternalApiSettings] = None
 
     def sections(self) -> dict[str, Any]:
         data = self.model_dump(exclude_unset=True)

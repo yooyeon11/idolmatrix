@@ -10,7 +10,8 @@ incoming_files 表对账。
 - 消失即删行：本轮未见到的路径从表里删除
 - 挂载防护：目录不可访问或完全为空时不动表，避免 NAS 未挂载清空快照；
   真正清空（全部入库）由后续入库集成阶段删行
-- is_duplicate 为扫描时按文件名+大小对 MusicVideo 的重复提示
+- is_duplicate 为扫描时按 平台视频ID / 文件名+大小 / 大小+时长(±1秒) 对 MusicVideo
+  的重复提示（平台 ID 取自侧车 info.json / NFO，与库内 source_* casefold 比对）
 
 注：第二阶段起 /library/scan 改读本表；POST /library/scan/sync 手动触发同步。
 """
@@ -23,6 +24,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -30,12 +32,14 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.media.ffprobe import ProbeError, probe
 from app.models.incoming_file import IncomingFile
-from app.models.music_video import MusicVideo
 from app.services.file_service import drop_file_cache
 from app.services.library_service import (
     INCOMING_SETTLE_SECONDS,
     VIDEO_EXTENSIONS,
     _dir_has_entries,
+    extract_source_identity,
+    library_duplicate_index,
+    read_incoming_info,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +49,18 @@ _scan_lock = threading.Lock()
 
 # bili-sync 多P产物特征：Season 子目录 / S01E01 命名 / 同目录 tvshow.nfo
 _MULTI_RE = re.compile(r"(?:^|[/\\])Season\s*\d+[/\\]", re.IGNORECASE)
+
+
+def _sidecar_identity(path: Path) -> tuple[Optional[str], Optional[str]]:
+    """读侧车元数据（info.json / NFO）提取 (平台, 平台视频 ID)；没有则 (None, None)。
+
+    只做文件读取，不起 ffprobe —— 供「文件未变化但身份尚未回填」的旧缓存行兜底。
+    """
+    try:
+        info = read_incoming_info(path)
+    except Exception:  # noqa: BLE001
+        return None, None
+    return extract_source_identity(info)
 
 
 def _is_bilibili_multip(path: Path) -> bool:
@@ -123,6 +139,8 @@ def _sync_locked(db: Session) -> dict:
 
     now = time.time()
     rows = {r.file_path: r for r in db.scalars(select(IncomingFile)).all()}
+    # 重复提示索引一次载入：文件名+大小 或 大小+时长(±1秒) 双口径
+    dup_index = library_duplicate_index(db)
     seen: set[str] = set()
 
     for path, mtime, size in candidates:
@@ -141,7 +159,21 @@ def _sync_locked(db: Session) -> dict:
             and row.file_size == size
             and row.probed_at is not None
         ):
-            continue  # 未变化且探测成功过 → 复用缓存
+            # 未变化且探测成功过 → 复用缓存。
+            # 例外：升级后旧行还没有平台视频身份（source_id 为 NULL）——
+            # 只读侧车元数据补齐（不起 ffprobe），补上后按当前库重算重复提示。
+            # 仍拿不到身份时置空串哨兵（= 已读过、确实无元数据），下轮不再重试。
+            if row.source_id is not None:
+                continue
+            platform, sid = _sidecar_identity(path)
+            row.source_platform = platform
+            row.source_id = sid or ""
+            row.is_duplicate = dup_index.is_duplicate(
+                path.name, size, row.duration,
+                source_platform=platform, source_id=sid,
+            )
+            stats["updated"] += 1
+            continue
 
         duration = width = height = None
         video_codec = audio_codec = None
@@ -163,16 +195,14 @@ def _sync_locked(db: Session) -> dict:
         finally:
             drop_file_cache(path)
 
-        # 扫描阶段不做全量 SHA256（与 _scan_one 同口径）：文件名+大小做重复提示
-        is_duplicate = (
-            db.scalar(
-                select(MusicVideo.id).where(
-                    MusicVideo.deleted_at.is_(None),
-                    MusicVideo.file_name == path.name,
-                    MusicVideo.file_size == size,
-                ).limit(1)
-            )
-            is not None
+        # 平台视频身份（info.json / NFO）：按 ID 判重的输入；读不到不影响其余口径
+        platform, sid = _sidecar_identity(path)
+
+        # 扫描阶段不做全量 SHA256（与 _scan_one 同口径）：
+        # 平台视频ID / 文件名+大小 / 大小+时长 做重复提示（换画质、换名下载也能命中）
+        is_duplicate = dup_index.is_duplicate(
+            path.name, size, duration,
+            source_platform=platform, source_id=sid,
         )
 
         if row is None:
@@ -187,6 +217,8 @@ def _sync_locked(db: Session) -> dict:
                     height=height,
                     video_codec=video_codec,
                     audio_codec=audio_codec,
+                    source_platform=platform,
+                    source_id=sid or "",
                     is_duplicate=is_duplicate,
                     probed_at=probed_at,
                 )
@@ -201,6 +233,8 @@ def _sync_locked(db: Session) -> dict:
             row.height = height
             row.video_codec = video_codec
             row.audio_codec = audio_codec
+            row.source_platform = platform
+            row.source_id = sid or ""
             row.is_duplicate = is_duplicate
             row.probed_at = probed_at
             stats["updated"] += 1

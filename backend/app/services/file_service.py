@@ -132,6 +132,45 @@ def confined_derived_file(rel_or_abs: Optional[str | Path]) -> Optional[Path]:
     return p if p.is_file() else None
 
 
+SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".vtt", ".sub", ".sup", ".idx"}
+
+
+def find_sidecar_subtitles(video_path: str | Path) -> list[Path]:
+    """查找与视频同名的字幕文件（srt/ass/ssa/vtt/sub/sup/idx）。
+
+    匹配形态（不区分大小写）：
+    - foo.srt —— 与视频同名换后缀
+    - foo.mkv.srt —— 视频全名 + 字幕后缀
+    - foo.zh.srt / foo.default.ass —— 语言码 / 标志位中间段（保留段随行迁移）
+
+    严格限定「视频 stem 开头 + 字幕后缀」，绝不匹配其它视频或无关文件。
+    """
+    video = Path(video_path)
+    # 不要求视频本体仍存在:入库/迁移时视频已先被移走,字幕靠「父目录 + 文件名前缀」匹配
+    parent = video.parent
+    if not parent.is_dir():
+        return []
+    stem = video.stem.lower()
+    try:
+        entries = sorted(parent.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return []
+    seen: set[str] = set()
+    out: list[Path] = []
+    for p in entries:
+        if not p.is_file() or p.suffix.lower() not in SUBTITLE_EXTENSIONS:
+            continue
+        pstem = p.stem.lower()
+        if pstem != stem and not pstem.startswith(stem + "."):
+            continue
+        key = str(p).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
 def find_sidecar_cover(video_path: str | Path) -> Optional[Path]:
     """查找与视频同名的封面：foo.webp 或 foo.mkv.webp。"""
     video = Path(video_path)

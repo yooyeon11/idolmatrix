@@ -235,6 +235,9 @@ class MusicVideo(BaseEntityMixin, Base):
     )
 
     external_links: Mapped[Optional[List[Any]]] = mapped_column(JSON)
+    # 视频参与者（展示字段）：[{id?: int, name: str}] —— 仅详情页相关艺人展示，
+    # 不参与路径规则/统计/艺人页，与 artists 关联完全解耦
+    participants: Mapped[Optional[list]] = mapped_column(JSON)
     description: Mapped[Optional[str]] = mapped_column(Text)
     # 中文简介：由 AI 根据视频内容生成（原 description 为来源原文，保持只读）
     chinese_description: Mapped[Optional[str]] = mapped_column(Text)

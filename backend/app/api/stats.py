@@ -12,6 +12,7 @@ from app.schemas.dashboard import (
     WatchPingResult,
 )
 from app.services.stats_service import DEFAULT_LIMIT, MAX_LIMIT, library_stats, recap
+from app.services.stats_service import artist_trend
 from app.services.watch_service import record_watch
 
 router = APIRouter(prefix="/stats", tags=["stats"])
@@ -27,6 +28,17 @@ def get_library_stats(
     return library_stats(
         db, range_key=range, include_shorts=include_shorts, limit=limit
     )
+
+
+@router.get("/artist-trend")
+def get_artist_trend(
+    db: DbDep,
+    by: str = Query("created", description="created=按入库时间，performance=按表演时间"),
+    months: int = Query(12, ge=3, le=36),
+    limit: int = Query(5, ge=1, le=10),
+):
+    """艺人轨迹（实验性）：主体 × 月份入库条数，堆叠柱与热度榜共用。"""
+    return artist_trend(db, by=by, months=months, limit=limit)
 
 
 @router.get("/recap", response_model=StatsRecap)
