@@ -63,7 +63,7 @@ class MusicVideoBase(_SourceKeyNorm):
 
     artist_ids: Optional[List[int]] = None
     group_ids: Optional[List[int]] = None
-    subject_artist_id: Optional[int] = None
+    participants: Optional[List[dict]] = None  # 视频参与者:仅详情页展示
 
     event_name: Optional[str] = None
     performance_date: Optional[date] = None
@@ -116,7 +116,7 @@ class MusicVideoUpdate(_SourceKeyNorm):
     tracks: Optional[List[MusicVideoTrackInput]] = None
     artist_ids: Optional[List[int]] = None
     group_ids: Optional[List[int]] = None
-    subject_artist_id: Optional[int] = None
+    participants: Optional[List[dict]] = None
     event_name: Optional[str] = None
     performance_date: Optional[date] = None
     is_short: Optional[bool] = None
@@ -176,6 +176,7 @@ class MusicVideoBrief(EntityReadMixin):
     ingestion_status: str = "incoming"
     song_id: Optional[int] = None
     subject_artist_id: Optional[int] = None
+    participants: Optional[List[dict]] = None
     # 关联名称（卡片视图用）
     song_name: Optional[str] = None
     song_chinese_name: Optional[str] = None
@@ -183,6 +184,12 @@ class MusicVideoBrief(EntityReadMixin):
     subject_artist_chinese_name: Optional[str] = None
     performance_date: Optional[date] = None
     release_date: Optional[date] = None
+
+
+class DeleteScannedRequest(ORMModel):
+    """删除待整理文件请求：路径必须与扫描缓存表记录逐字匹配。"""
+
+    path: str
 
 
 class MatchHintEntity(ORMModel):
@@ -218,6 +225,18 @@ class MatchHintsResult(ORMModel):
     match_mode: str = "strict"
 
 
+class DuplicateCopyInfo(ORMModel):
+    """is_duplicate 命中的库内副本信息：供待整理列表展示分辨率 / 体积对比。"""
+
+    id: int
+    uid: Optional[str] = None
+    name: Optional[str] = None
+    file_size: Optional[int] = None
+    duration: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
 class ScannedFileItem(ORMModel):
     """扫描结果项：尚未入库的待整理文件。"""
 
@@ -231,6 +250,12 @@ class ScannedFileItem(ORMModel):
     audio_codec: Optional[str] = None
     file_hash: Optional[str] = None
     is_duplicate: bool = False
+    # is_duplicate=True 时命中的库内副本（读侧按当前库实时计算）
+    duplicate_of: Optional[DuplicateCopyInfo] = None
+    # 读侧健康检查：missing_json / missing_cover / suspicious_file（scan 端点即时判断）
+    issues: List[str] = []
+    # 添加时间（扫描缓存行的 created_at），供前端按添加时间排序
+    created_at: Optional[str] = None
 
 
 class IngestRequest(ORMModel):
@@ -264,7 +289,6 @@ class PathPreviewRequest(ORMModel):
     # 预览需与入库同口径（否则 AI 识别全新艺人时预览会错误平铺根目录）
     draft_artist_names: Optional[List[str]] = None
     draft_group_names: Optional[List[str]] = None
-    draft_subject_artist_name: Optional[str] = None
     artist_ids: Optional[List[int]] = None
     group_ids: Optional[List[int]] = None
     video_types: Optional[List[str]] = None
@@ -322,7 +346,6 @@ class BuildTitleRequest(ORMModel):
     song_ids: Optional[List[int]] = None
     artist_ids: Optional[List[int]] = None
     group_ids: Optional[List[int]] = None
-    subject_artist_id: Optional[int] = None
     event_name: Optional[str] = None
     video_types: Optional[List[str]] = None
 
@@ -337,6 +360,8 @@ class IngestResult(ORMModel):
     music_video_id: int
     moved: bool
     destination_path: Optional[str] = None
+    # 随行入库的同名字幕文件名（srt/ass/vtt 等，供前端提示）
+    moved_subtitles: List[str] = []
 
 
 class VideoPathSuggestion(ORMModel):

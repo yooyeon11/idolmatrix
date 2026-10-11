@@ -39,8 +39,10 @@ VIDEO_TYPES = (
     "Other",
 )
 
-# ⚠ chinese_description 那一条是**占位符** —— 由 build_system_prompt(desc_prompt) 替换注入，
-# 默认值 DEFAULT_DESC_RULE（原版自由口径），可在「AI 设置」页自定义。SYSTEM_PROMPT 是渲染结果。
+# ⚠ 两处是**占位符** —— 由 build_system_prompt(desc_prompt, title_prompt) 替换注入：
+#   {desc_rule}  中文简介规则，默认 DEFAULT_DESC_RULE（原版自由口径）
+#   {title_rule} 主标题（name）规范，默认 DEFAULT_TITLE_RULE（YYMMDD Artist - Song [Type]）
+# 两者均可在「AI 设置」页自定义。SYSTEM_PROMPT 是渲染结果。
 _SYSTEM_TEMPLATE = """你是 K-pop 媒体库的元数据整理助手。根据给定的视频信息（来自 yt-dlp 的 info.json 精简字段）、库内已选关联名称以及用户当前表单值，生成入库元数据。
 
 字段说明：
@@ -67,7 +69,6 @@ _SYSTEM_TEMPLATE = """你是 K-pop 媒体库的元数据整理助手。根据给
 - 无法确定时选 Other，严禁自创类型名称。
 - event_name: 舞台/活动名称（如 XX 艺术节、XX 校庆、XX 电视台节目、M COUNTDOWN、音乐银行等；用于区分「XX艺术节 / XX校庆 / XX电视台」这类演出场合，无则 null）
 - performance_date: 表演日期 YYYY-MM-DD（不确定则 null）
-- subject_artist_name: 直拍对象（艺人或成员名，仅 Fancam 适用，否则 null）
 - is_solo: 是否为 solo 表演（布尔值 true/false）。判断标准：表演者是独立 solo 艺人（如 IU、金在中），或视频是个人舞台/个曲表演而非团体合体表演。组合成员的个人直拍（如 Red Velvet 的 IRENE FanCam）不算 solo 表演；只有表演主体是 solo 歌手/个人舞台时才为 true，不确定则 null
 {desc_rule}
 - suggested_tracks: 曲目列表。多首歌时必须按「每首歌自己的专辑」配对，不要把所有专辑摊到所有歌上。每项 {"song": "官方曲名", "albums": ["专辑1", "专辑2"]}；一首歌可对应多张专辑（数字单曲 + 正专很常见）；不确定专辑则 albums 为 [] 或省略。单曲视频也请返回一项。
@@ -75,7 +76,26 @@ _SYSTEM_TEMPLATE = """你是 K-pop 媒体库的元数据整理助手。根据给
 
 注意：视频平台（YouTube/Bilibili 等）与是否短视频（is_short）由系统自动判断，不要生成 source_platform / is_short / 原 description 字段。
 
-📛 标题（name）规范：YYMMDD Artist - Song [Event Name Type]
+{title_rule}
+
+📛 缺少 info.json 元数据时的处理：
+- 当「视频信息」中缺少 title / webpage_url / uploader / upload_date 等来源字段（仅剩 file_name 文件名与技术参数）时，说明该视频没有 info.json，文件名是唯一线索。
+- 请从文件名解析常见命名格式：如「Artist - Song MV_240102」「240101 SBS 인기가요_Artist_Song」→ 艺人 / 歌曲 / 事件类型 / 日期；文件名里的 [4K] / 60fps 一类画质前缀是来源标签，直接忽略。
+- 文件名含打歌台关键字（SBS / MBC / KBS / Mnet / 인기가요 / 음악중심 / Show 等）→ video_types 优先含 PerformanceVideo 并填 event_name；含粉丝见面会关键字（Fan Meeting / FM / 粉丝见面会）→ SpecialVideo。类型只按内容性质判断，不要因为时长很短就选 ShortVideo（少于 70 秒的混剪/合集请用 MixEdit）。
+- 文件名无法可靠解析出艺人或歌曲时，对应字段必须设为 null，并在 notice 中说明原因，严禁编造艺人、歌曲或专辑名。
+
+只输出一个 JSON 对象，不要输出任何其他文字或代码块标记。字段没有把握时设为 null。"""
+
+# chinese_description 规则的内置默认 —— 即「原版」自由口径（业主 2026-09-23 要求恢复）。
+# AI 设置页留空 = 用它；「恢复默认」按钮也回落到它。
+DEFAULT_DESC_RULE = (
+    "- chinese_description: 中文简介（用中文根据视频内容生成 2-4 句话，"
+    "介绍这是什么演出/舞台/节目、表演者与曲目等；不要照抄原始简介原文）"
+)
+
+# 主标题（name）规范的内置默认 —— 原版「YYMMDD Artist - Song [Event Name Type]」口径。
+# AI 设置页留空 = 用它；「恢复默认」按钮也回落到它。
+DEFAULT_TITLE_RULE = """📛 标题（name）规范：YYMMDD Artist - Song [Event Name Type]
 
 1️⃣ YYMMDD（日期前缀）：6 位日期（如 240511）。优先取表演日期（performance_date），无则取上传日期（upload_date）。
 
@@ -98,38 +118,29 @@ _SYSTEM_TEMPLATE = """你是 K-pop 媒体库的元数据整理助手。根据给
 - 时长 < 1 分钟（duration < 60）→ 必须包含 Shorts（如 [FanCam Shorts]）。
 - ❌ 括号内禁止写画质 / 帧率 / 编码等来源技术标签：4K、8K、60p、4K60p、8K60p、1080p、2160p、60fps、HEVC 之类一律不写。
 - video_info 的 width / height / fps 只用于判断视频类型与时长分档，**严禁写进 name**。
-- ❌ 来源标题 / 文件名里自带的画质标签（如「[4K] Artist - Song MV_240102」「… 4K60p」）同样必须丢弃，不得带进 name。
-
-📛 缺少 info.json 元数据时的处理：
-- 当「视频信息」中缺少 title / webpage_url / uploader / upload_date 等来源字段（仅剩 file_name 文件名与技术参数）时，说明该视频没有 info.json，文件名是唯一线索。
-- 请从文件名解析常见命名格式：如「Artist - Song MV_240102」「240101 SBS 인기가요_Artist_Song」→ 艺人 / 歌曲 / 事件类型 / 日期；文件名里的 [4K] / 60fps 一类画质前缀是来源标签，直接忽略。
-- 文件名含打歌台关键字（SBS / MBC / KBS / Mnet / 인기가요 / 음악중심 / Show 等）→ video_types 优先含 PerformanceVideo 并填 event_name；含粉丝见面会关键字（Fan Meeting / FM / 粉丝见面会）→ SpecialVideo。类型只按内容性质判断，不要因为时长很短就选 ShortVideo（少于 70 秒的混剪/合集请用 MixEdit）。
-- 文件名无法可靠解析出艺人或歌曲时，对应字段必须设为 null，并在 notice 中说明原因，严禁编造艺人、歌曲或专辑名。
-
-只输出一个 JSON 对象，不要输出任何其他文字或代码块标记。字段没有把握时设为 null。"""
-
-# chinese_description 规则的内置默认 —— 即「原版」自由口径（业主 2026-09-23 要求恢复）。
-# AI 设置页留空 = 用它；「恢复默认」按钮也回落到它。
-DEFAULT_DESC_RULE = (
-    "- chinese_description: 中文简介（用中文根据视频内容生成 2-4 句话，"
-    "介绍这是什么演出/舞台/节目、表演者与曲目等；不要照抄原始简介原文）"
-)
+- ❌ 来源标题 / 文件名里自带的画质标签（如「[4K] Artist - Song MV_240102」「… 4K60p」）同样必须丢弃，不得带进 name。"""
 
 _DESC_RULE_SLOT = "{desc_rule}"
 _DESC_RULE_PREFIX = "- chinese_description: "
+_TITLE_RULE_SLOT = "{title_rule}"
 
 
-def build_system_prompt(desc_rule: Optional[str] = None) -> str:
-    """把中文简介规则注入系统提示词模板（其余字段说明不变）。
+def build_system_prompt(
+    desc_rule: Optional[str] = None,
+    title_rule: Optional[str] = None,
+) -> str:
+    """把中文简介规则、标题规范注入系统提示词模板（其余字段说明不变）。
 
     ⚠ 必须用 replace —— 模板正文含 JSON 示例（`{"song": ...}`），str.format 会直接炸。
-    规则文本按**整行**填写（自带 `- chinese_description: ` 前缀）；若用户只写了内容，
-    这里自动补回前缀，避免模型丢失字段名。
+    中文简介规则按**整行**填写（自带 `- chinese_description: ` 前缀）；若用户只写了内容，
+    这里自动补回前缀，避免模型丢失字段名。标题规范是整段多行文本，原样注入。
+    两者留空（或全空白）= 用各自的内置默认。
     """
     rule = (desc_rule or "").strip() or DEFAULT_DESC_RULE
     if "chinese_description" not in rule:
         rule = f"{_DESC_RULE_PREFIX}{rule}"
-    return _SYSTEM_TEMPLATE.replace(_DESC_RULE_SLOT, rule)
+    title = (title_rule or "").strip() or DEFAULT_TITLE_RULE
+    return _SYSTEM_TEMPLATE.replace(_DESC_RULE_SLOT, rule).replace(_TITLE_RULE_SLOT, title)
 
 
 # 渲染结果（= 内置默认规则）。保留 SYSTEM_PROMPT 之名，既有调用方与守卫测试不受影响。
@@ -675,7 +686,6 @@ def _normalize(data: dict) -> dict:
         "name",
         "chinese_name",
         "event_name",
-        "subject_artist_name",
         "chinese_description",
     ):
         value = data.get(key)
@@ -798,7 +808,7 @@ def suggest_ingest(
 ) -> dict:
     """调用 AI 生成入库元数据建议。
 
-    `system_prompt` 由调用方按 AI 设置里的自定义中文简介规则渲染
+    `system_prompt` 由调用方按 AI 设置里的自定义中文简介 / 标题规范渲染
     （见 build_system_prompt）；为空时退回内置默认提示词 SYSTEM_PROMPT。
     """
     if not cfg.get("base_url") or not cfg.get("model"):
@@ -846,7 +856,7 @@ def suggest_ingest(
         library_block = (
             "\n\n库内候选（来自本库，用于辅助识别）：\n"
             f"{json.dumps(library_context, ensure_ascii=False, indent=1)}\n"
-            "规则：suggested_artists / suggested_groups / suggested_songs / subject_artist_name 等名称"
+            "规则：suggested_artists / suggested_groups / suggested_songs 等名称"
             "应优先与上方候选做别名匹配（韩文/罗马音/中文互相对应也算同一人），命中时使用候选中的官方名称，"
             "严禁为已在候选中的实体建议新建；确实无法匹配时才建议新建。"
             "matched_tracks 给出库内「歌曲 → 所属专辑」的官方配对：suggested_tracks 中对应歌曲的 albums"

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
@@ -40,6 +40,7 @@ from app.services.file_service import (
     compute_file_hash,
     drop_file_cache,
     find_sidecar_cover,
+    find_sidecar_subtitles,
     get_file_size,
     list_library_dirs,
     match_existing_dir,
@@ -142,6 +143,155 @@ def scan_incoming(db: Session) -> list[ScannedFileItem]:
     return items
 
 
+class _LibraryDupIndex:
+    """库内在库视频的重复比对索引。
+
+    提示口径不能只靠「文件名 + 大小」：待入库文件与库内副本文件名不同
+    （入库改名后再下载 / 换名下载）时必然失配，故补一路
+    「大小 + 时长(±1 秒)」的内容指纹——字节数与时长完全一致的
+    两个不同视频实际不存在。
+
+    再补一路「平台视频 ID（source_platform+source_id，平台名 lower）」：
+    同一视频换画质 / 换封装重下载（.mkv↔.mp4、4K↔1080p）时文件名、
+    字节数、时长全都会变，只有平台 ID 不变。实测该路径是换画质重下载
+    场景下唯一能命中的口径。
+
+    find_duplicate 在 is_duplicate 的基础上返回命中的库内行，
+    供待整理列表展示「本视频 vs 库内副本」的分辨率 / 体积对比。
+    """
+
+    def __init__(self, rows) -> None:
+        # 同一键命中多行（库内自身就有重复）时，取画质最好的一份做对比对象
+        def _prefer(cur, new):
+            if cur is None:
+                return new
+            cur_q = (cur.width or 0) * (cur.height or 0)
+            new_q = (new.width or 0) * (new.height or 0)
+            if (new_q, new.file_size or 0) > (cur_q, cur.file_size or 0):
+                return new
+            return cur
+
+        self._names: dict = {}
+        self._sizes: set = set()
+        self._sd: dict = {}
+        # 平台名 casefold（库内 youtube/YouTube 混存）；视频 ID 精确比对
+        # —— YouTube ID / BV号本身区分大小写，casefold 会把两个不同视频误判成同一条
+        self._ids: dict = {}
+        for r in rows:
+            if r.file_size is None:
+                continue
+            self._names[(r.file_name, r.file_size)] = _prefer(
+                self._names.get((r.file_name, r.file_size)), r
+            )
+            self._sizes.add(r.file_size)
+            if r.duration is not None:
+                sd_key = (r.file_size, r.duration)
+                self._sd[sd_key] = _prefer(self._sd.get(sd_key), r)
+            if r.source_id:
+                id_key = ((r.source_platform or "").casefold(), r.source_id)
+                self._ids[id_key] = _prefer(self._ids.get(id_key), r)
+
+    def find_duplicate(
+        self,
+        file_name: str,
+        file_size: Optional[int],
+        duration: Optional[int],
+        *,
+        source_platform: Optional[str] = None,
+        source_id: Optional[str] = None,
+    ):
+        """返回命中的库内行，无命中返回 None。
+
+        优先级：平台视频 ID > 文件名+大小 > 大小+时长(±1秒)。
+        """
+        if source_id:
+            hit = self._ids.get(((source_platform or "").casefold(), source_id))
+            if hit is not None:
+                return hit
+        if file_size is None or file_size not in self._sizes:
+            return None
+        hit = self._names.get((file_name, file_size))
+        if hit is not None:
+            return hit
+        if duration is None:
+            return None
+        for off in (-1, 0, 1):
+            hit = self._sd.get((file_size, duration + off))
+            if hit is not None:
+                return hit
+        return None
+
+    def is_duplicate(
+        self,
+        file_name: str,
+        file_size: Optional[int],
+        duration: Optional[int],
+        *,
+        source_platform: Optional[str] = None,
+        source_id: Optional[str] = None,
+    ) -> bool:
+        return (
+            self.find_duplicate(
+                file_name,
+                file_size,
+                duration,
+                source_platform=source_platform,
+                source_id=source_id,
+            )
+            is not None
+        )
+
+
+def library_duplicate_index(db: Session) -> _LibraryDupIndex:
+    """一次载入库内在库视频的比对键与展示元数据，构建重复比对索引。"""
+    rows = db.execute(
+        select(
+            MusicVideo.id,
+            MusicVideo.uid,
+            MusicVideo.name,
+            MusicVideo.file_name,
+            MusicVideo.file_size,
+            MusicVideo.duration,
+            MusicVideo.width,
+            MusicVideo.height,
+            MusicVideo.source_platform,
+            MusicVideo.source_id,
+        ).where(
+            MusicVideo.deleted_at.is_(None),
+            MusicVideo.file_size.is_not(None),
+        )
+    ).all()
+    return _LibraryDupIndex(rows)
+
+
+def extract_source_identity(info: dict) -> tuple[Optional[str], Optional[str]]:
+    """从侧车元数据提取 (平台, 平台视频 ID)，与 MusicVideo.source_* 同口径。
+
+    yt-dlp info.json：extractor="Youtube"（大小写不稳）+ id=视频ID；
+    B站 NFO/json：extractor="bilibili" + id=BV号。
+    平台名统一 casefold 后返回；比对方也要 casefold（库内 youtube/YouTube 混存）。
+    """
+    sid = info.get("id")
+    if isinstance(sid, bool) or sid is None:
+        return None, None
+    if isinstance(sid, int):
+        sid = str(sid)
+    if not isinstance(sid, str) or not sid.strip():
+        return None, None
+    extractor = info.get("extractor")
+    url = info.get("webpage_url")
+    blob = f"{extractor or ''} {url or ''}".casefold()
+    if "bilibili" in blob or "b23.tv" in blob:
+        platform = "bilibili"
+    elif "youtu" in blob:
+        platform = "youtube"
+    elif extractor and isinstance(extractor, str) and extractor.strip():
+        platform = extractor.strip().casefold()
+    else:
+        return None, None
+    return platform, sid.strip()
+
+
 def _scan_one(path: Path, db: Session) -> ScannedFileItem:
     file_size = get_file_size(path)
     duration = width = height = None
@@ -161,14 +311,18 @@ def _scan_one(path: Path, db: Session) -> ScannedFileItem:
     finally:
         drop_file_cache(path)
 
+    # 平台视频身份（info.json / NFO）：按 ID 判重的输入；读不到不影响其余口径
+    try:
+        info = read_incoming_info(path)
+    except Exception:  # noqa: BLE001
+        info = {}
+    platform, source_id = extract_source_identity(info)
+
     # 扫描阶段不做全量 SHA256（4K 片会把 NAS 页缓存顶满）。
-    # 重复提示用文件名 + 大小；入库时再哈希并按 file_hash 唯一约束拦截。
-    existing = db.scalar(
-        select(MusicVideo.id).where(
-            MusicVideo.deleted_at.is_(None),
-            MusicVideo.file_name == path.name,
-            MusicVideo.file_size == file_size,
-        ).limit(1)
+    # 重复提示用 平台视频ID / 文件名+大小 / 大小+时长；入库时再哈希并按唯一约束拦截。
+    dup = library_duplicate_index(db).is_duplicate(
+        path.name, file_size, duration,
+        source_platform=platform, source_id=source_id,
     )
 
     return ScannedFileItem(
@@ -181,7 +335,7 @@ def _scan_one(path: Path, db: Session) -> ScannedFileItem:
         video_codec=video_codec,
         audio_codec=audio_codec,
         file_hash=None,
-        is_duplicate=existing is not None,
+        is_duplicate=dup,
     )
 
 
@@ -220,7 +374,8 @@ _TYPE_DIR = {
     "MixEdit": "MIX混剪",
     "PerformanceVideo": "Live",
     "Fancam": "Live",
-    "SpecialStage": "Live",
+    # 特别舞台与 MV 同目录（用户定稿：SpecialStage 归 MV，不再落 Live）
+    "SpecialStage": "MV",
     "CoverStage": "Live",
     # 合作舞台正常走 ②-2 短路（自带根目录），这里是纵深防御：万一将来短路被摘掉，
     # 也落 Live 而不是静默退化成 Other
@@ -680,6 +835,25 @@ def relocate_video_file(
         except OSError:
             logger.warning("伴随文件迁移失败（保留原位）: %s", sidecar)
 
+    # 同名字幕随行迁移(目标名跟随新视频名,保留语言码段;目标存在时不覆盖)
+    for sub_src in find_sidecar_subtitles(source_abs):
+        try:
+            if not sub_src.is_file():
+                continue
+        except OSError:
+            continue
+        rel_mid = sub_src.stem[len(source_abs.stem):]
+        sub_dst = dest_abs.parent / f"{dest_abs.stem}{rel_mid}{sub_src.suffix}"
+        if sub_dst.exists() or sub_src.resolve() == sub_dst.resolve():
+            continue
+        sub_dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(sub_src), str(sub_dst))
+            moved_sidecars.append(sub_src.name)
+            logger.info("同名字幕已随视频迁移: %s", sub_dst)
+        except OSError as e:
+            logger.warning("字幕迁移失败（保留原位）: %s（%s）", sub_src, e)
+
     db.commit()
     logger.info(
         "视频 %s 存储路径变更: %s -> %s（伴随文件 %d 个）",
@@ -814,11 +988,6 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
     # 0. 直接 FK active 校验：禁止指向已软删除的 Song / Artist
     if mv_data.song_id is not None and not Song.get_active(db, mv_data.song_id):
         raise ValueError(f"关联 Song 不存在或已删除 (id={mv_data.song_id})")
-    if (
-        mv_data.subject_artist_id is not None
-        and not Artist.get_active(db, mv_data.subject_artist_id)
-    ):
-        raise ValueError(f"关联 Artist(subject) 不存在或已删除 (id={mv_data.subject_artist_id})")
 
     # 1. 计算哈希（若未提供）
     file_hash = None
@@ -827,8 +996,29 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
     except OSError:
         pass
 
-    # 1.5 去重预检（仅对活跃记录；软删除记录允许重建，不阻断入库）
+    # 1.5 平台视频身份：表单值优先；缺了用侧车元数据（yt-dlp info.json / B站 NFO）补齐。
+    #     必须在去重预检之前补齐 —— 否则表单没填 source 的 B站/无表单来源会先放行，
+    #     撞唯一索引后才报 409「并发入库」，提示词完全误导。
+    source_platform = mv_data.source_platform
+    source_id = mv_data.source_id
+    source_url = mv_data.source_url
+    if not (source_platform and source_id):
+        try:
+            info = read_incoming_info(source)
+        except Exception:  # noqa: BLE001
+            info = {}
+        else:
+            platform, sid = extract_source_identity(info)
+            if platform and sid:
+                source_platform = source_platform or platform
+                source_id = source_id or sid
+                if not source_url and isinstance(info.get("webpage_url"), str):
+                    source_url = info["webpage_url"]
+
+    # 1.6 去重预检（仅对活跃记录；软删除记录允许重建，不阻断入库）
     #    提前校验避免文件移动后才因唯一索引失败，留下孤儿文件。
+    #    平台身份按 lower() 比对：库内 youtube / YouTube 混存，精确 == 会漏判
+    #    （DB 唯一索引也是 BINARY 排序，大小写变体可绕过）。
     if file_hash:
         existing = db.scalar(
             select(MusicVideo)
@@ -842,12 +1032,12 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
             raise ValueError(
                 f"该文件已入库（重复 file_hash），music_video_id={existing.id}"
             )
-    if mv_data.source_platform and mv_data.source_id:
+    if source_platform and source_id:
         existing = db.scalar(
             select(MusicVideo)
             .where(
-                MusicVideo.source_platform == mv_data.source_platform,
-                MusicVideo.source_id == mv_data.source_id,
+                func.lower(MusicVideo.source_platform) == source_platform.casefold(),
+                MusicVideo.source_id == source_id,
                 MusicVideo.deleted_at.is_(None),
             )
             .limit(1)
@@ -864,16 +1054,6 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
         # 短视频判定唯一口径：只看 video_types 是否含 ShortVideo，不再用「时长 < 70 秒」兜底
         # （否则 70 秒以内的 MIX 混剪 / 预告会被塞进短视频列表）
         is_short = is_short_video(video_types, video_type)
-    # B站来源回填：用户未显式填 source 时，用 NFO/json 的 BV 号与链接补齐
-    source_platform = mv_data.source_platform
-    source_id = mv_data.source_id
-    source_url = mv_data.source_url
-    if bili_info and not source_platform:
-        source_platform = "bilibili"
-        if not source_id and isinstance(bili_info.get("id"), str):
-            source_id = bili_info["id"]
-        if not source_url and isinstance(bili_info.get("webpage_url"), str):
-            source_url = bili_info["webpage_url"]
 
     mv = MusicVideo(
         name=mv_data.name,
@@ -885,7 +1065,7 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
         song_id=None,
         video_type=video_type,
         video_types=video_types,
-        subject_artist_id=mv_data.subject_artist_id,
+        participants=mv_data.participants,
         event_name=mv_data.event_name,
         performance_date=mv_data.performance_date,
         release_date=mv_data.release_date,
@@ -991,6 +1171,7 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
 
     # 4. 转移伴随文件：同名封面跟视频进正式库，并复制一份作缩略图；info.json 一并归档
     thumbnail_ready = False
+    moved_subtitles: list[str] = []
     try:
         cover_src = find_sidecar_cover(source)
         if cover_src is not None:
@@ -1061,6 +1242,27 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
                 shutil.move(str(meta_src), str(meta_dst))
                 logger.info("转移 B站元数据到库 mv=%s: %s", mv.id, meta_dst)
                 break
+
+        # 同名字幕随行归档（srt/ass/ssa/vtt/sub/sup/idx，含语言码中间段 foo.zh.srt）。
+        # 目标名跟随新视频名（保留语言码段）；目标已存在时不覆盖（防误删同名字幕）。
+        if request.move_file and destination_abs is not None:
+            for sub_src in find_sidecar_subtitles(source):
+                try:
+                    if not sub_src.is_file():
+                        continue
+                except OSError:
+                    continue
+                rel_mid = sub_src.stem[len(source.stem):]  # ".zh" / "" / ".default"
+                sub_dst = destination_abs.parent / f"{destination_abs.stem}{rel_mid}{sub_src.suffix}"
+                if sub_dst.exists() or sub_src.resolve() == sub_dst.resolve():
+                    continue
+                sub_dst.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.move(str(sub_src), str(sub_dst))
+                    moved_subtitles.append(sub_src.name)
+                    logger.info("同名字幕已随视频入库 mv=%s: %s", mv.id, sub_dst)
+                except OSError as e:
+                    logger.warning("字幕迁移失败（保留原位）: %s（%s）", sub_src, e)
     except Exception as e:  # noqa: BLE001
         logger.warning("伴随文件转移失败 mv=%s: %s", mv.id, e)
 
@@ -1107,6 +1309,7 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
         music_video_id=mv.id,
         moved=moved,
         destination_path=str(destination_abs) if destination_abs else None,
+        moved_subtitles=moved_subtitles,
     )
 
 
@@ -1429,6 +1632,12 @@ def _purge_derived_for(db: Session, mv: MusicVideo) -> None:
                     side, settings.incoming_dir
                 ):
                     side.unlink(missing_ok=True)
+            # 同名字幕一并清理（含 foo.zh.srt 语言码段），不随 purge 留成孤儿
+            for sub in find_sidecar_subtitles(abs_path):
+                if _path_under(sub, settings.library_dir) or _path_under(
+                    sub, settings.incoming_dir
+                ):
+                    sub.unlink(missing_ok=True)
         except OSError:
             pass
 

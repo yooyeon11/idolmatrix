@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -12,10 +14,10 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import settings
 from app.core.deps import DbDep
 from app.models.incoming_file import IncomingFile
-from app.models.music_video import MusicVideo
 from app.schemas import (
     BuildTitleRequest,
     BuildTitleResult,
+    DuplicateCopyInfo,
     IncomingInfoItem,
     IncomingInfoRequest,
     IngestRequest,
@@ -28,6 +30,7 @@ from app.schemas import (
     ReorganizePlanItem,
     ReorganizeResult,
     ScannedFileItem,
+    DeleteScannedRequest,
 )
 from app.services import audiodb_service
 from app.services.derived_http import serve_derived_image
@@ -35,6 +38,7 @@ from app.services.incoming_match_service import build_match_hints
 from app.services.file_service import (
     _sanitize,
     find_sidecar_cover,
+    find_sidecar_subtitles,
     list_library_dirs,
     match_existing_dir,
 )
@@ -44,12 +48,16 @@ from app.services.library_service import (
     auto_organize_rel,
     cleanup_missing_videos,
     execute_reorganize,
+    extract_source_identity,
     ingest_video,
+    library_duplicate_index,
     plan_reorganize,
     read_incoming_info,
 )
 
 router = APIRouter(prefix="/library", tags=["library"])
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/scan", response_model=List[ScannedFileItem])
@@ -58,24 +66,80 @@ def scan_endpoint(db: DbDep):
 
     is_duplicate 在读侧按当前库复核：扫描落库的是快照，入库 / 清空失效视频 /
     回收站恢复之后可能过期（比如文件失效清空后，旧的「已存在」标记残留）。
+    复核口径（三路任一命中即提示）：平台视频 ID（source_platform+source_id，
+    双方 casefold）/ 文件名+大小 / 大小+时长(±1秒)。
     发现与快照不一致时顺带回写缓存表。
+
+    issues 为读侧健康检查（按文件系统现状即时判断，不落表）：
+    - missing_json：同名 info.json 缺失（yt-dlp / bili-sync 产物应有）
+    - missing_cover：同名封面缺失（find_sidecar_cover 同名/同名后缀式口径）
+    - suspicious_file：探测元数据全空（duration/width/height 一个都没有 →
+      很可能是拖动中未下载完的残缺文件，ffprobe 读不出流信息）
     """
     rows = db.scalars(select(IncomingFile).order_by(IncomingFile.file_path)).all()
-    live_keys = set(
-        db.execute(
-            select(MusicVideo.file_name, MusicVideo.file_size).where(
-                MusicVideo.deleted_at.is_(None),
-                MusicVideo.file_size.is_not(None),
-            )
-        ).all()
-    )
+    dup_index = library_duplicate_index(db)
     dirty = False
     items: List[ScannedFileItem] = []
     for r in rows:
-        dup = r.file_size is not None and (r.file_name, r.file_size) in live_keys
+        video_path = Path(r.file_path)
+        # 复核口径：平台视频ID / 文件名+大小 / 大小+时长(±1秒) —— 快照可能过期，
+        # 入库 / 清空失效视频 / 回收站恢复之后按当前库重算。
+        # 升级后旧行还没有平台视频身份（NULL）：读侧兜底读一次侧车元数据并回填；
+        # 读不到置空串哨兵（= 确实无元数据），之后不再重读。
+        if r.source_id is None:
+            try:
+                info = read_incoming_info(video_path)
+            except Exception:  # noqa: BLE001
+                info = {}
+            r.source_platform, r.source_id = extract_source_identity(info)
+            r.source_id = r.source_id or ""
+            dirty = True
+        dup_row = dup_index.find_duplicate(
+            r.file_name,
+            r.file_size,
+            r.duration,
+            source_platform=r.source_platform,
+            source_id=r.source_id or None,
+        )
+        dup = dup_row is not None
         if dup != r.is_duplicate:
             r.is_duplicate = dup
             dirty = True
+        duplicate_of = None
+        if dup_row is not None:
+            duplicate_of = DuplicateCopyInfo(
+                id=dup_row.id,
+                uid=dup_row.uid,
+                name=dup_row.name,
+                file_size=dup_row.file_size,
+                duration=dup_row.duration,
+                width=dup_row.width,
+                height=dup_row.height,
+            )
+        issues: List[str] = []
+        sidecar_json = next(
+            (
+                p
+                for p in (
+                    video_path.with_suffix(".json"),
+                    video_path.parent / f"{video_path.stem}.info.json",
+                )
+                if p.is_file()
+            ),
+            None,
+        )
+        if sidecar_json is None:
+            issues.append("missing_json")
+        if find_sidecar_cover(r.file_path) is None:
+            issues.append("missing_cover")
+        # ffprobe 字段一个都没拿到 → 残缺/非视频文件（拖动中未下载完等）
+        if (
+            r.probed_at is None
+            and r.duration is None
+            and r.width is None
+            and r.height is None
+        ):
+            issues.append("suspicious_file")
         items.append(
             ScannedFileItem(
                 path=r.file_path,
@@ -87,6 +151,9 @@ def scan_endpoint(db: DbDep):
                 video_codec=r.video_codec,
                 audio_codec=r.audio_codec,
                 is_duplicate=dup,
+                duplicate_of=duplicate_of,
+                issues=issues,
+                created_at=r.created_at.isoformat() if r.created_at else None,
             )
         )
     if dirty:
@@ -244,12 +311,6 @@ def preview_path_endpoint(payload: PathPreviewRequest, db: DbDep):
         name = (draft_name or "").strip()
         if name and not any((g.name or "") == name for g in mv.groups):
             mv.groups.append(Group(name=name))
-    # 草稿直拍对象：个人主体场景（短视频/串烧/翻唱/个人直拍）优先于普通关联艺人
-    subject_draft = (payload.draft_subject_artist_name or "").strip()
-    if subject_draft and not any(
-        (a.name or "") == subject_draft for a in mv.artists
-    ):
-        mv.artists.insert(0, Artist(name=subject_draft))
     for draft_name in payload.draft_song_names or []:
         name = (draft_name or "").strip()
         if name:
@@ -298,14 +359,10 @@ _TITLE_TYPE_ZH = {
 
 
 def _title_artist_name(db: DbDep, payload: BuildTitleRequest) -> Optional[str]:
-    """标题艺人段（按 AI 规范优先官方英文名）：直拍对象 > 已选艺人 > 组合。"""
+    """标题艺人段（按 AI 规范优先官方英文名）：已选艺人 > 组合。"""
     from app.models.artist import Artist
     from app.models.group import Group
 
-    if payload.subject_artist_id:
-        artist = db.get(Artist, payload.subject_artist_id)
-        if artist is not None:
-            return artist.stage_name or artist.english_name or artist.name
     for aid in payload.artist_ids or []:
         artist = db.get(Artist, aid)
         if artist is not None:
@@ -394,6 +451,104 @@ def _fmt_yymmdd(value: Optional[str]) -> Optional[str]:
 def list_directories():
     """返回正式库已有的子目录（相对路径），供用户选择入库位置。"""
     return list_library_dirs()
+
+
+@router.get("/browse-dirs")
+def browse_dirs(rel: str = Query("", description="相对 library_dir 的目录路径;空=根")):
+    """逐级浏览正式库目录（文件夹选择对话框用）。
+
+    返回当前层子目录列表;越界/不存在回退根目录,只读不写。
+    """
+    root = settings.library_dir
+    if not root.exists():
+        return {"rel": "", "dirs": []}
+    root_resolved = root.resolve()
+    try:
+        target = (root / rel).resolve() if rel else root_resolved
+    except (OSError, ValueError):
+        target = root_resolved
+    # 防穿越：解析后必须仍在 library_dir 内;否则回退根
+    if not target.is_relative_to(root_resolved):
+        target = root_resolved
+    cur_rel = "" if target == root_resolved else target.relative_to(root_resolved).as_posix()
+    dirs: list[str] = []
+    try:
+        dirs = sorted(
+            (p.name for p in target.iterdir() if p.is_dir() and not p.name.startswith(".")),
+            key=str.casefold,
+        )
+    except OSError:
+        dirs = []
+    return {"rel": cur_rel, "dirs": dirs}
+
+
+@router.delete("/scan")
+def delete_scanned_file(payload: DeleteScannedRequest, db: DbDep):
+    """删除待整理文件：视频 + 同名 info.json + 同名封面一并删除。
+
+    安全边界（坚决防误删）：
+    1. 路径必须与扫描缓存表中的记录逐字匹配 —— 只允许删「扫描到过的 incoming 文件」；
+    2. 解析后必须仍在 incoming 扫描根目录之内（防穿越出 incoming）；
+    3. 伴随文件只按「同名 json / find_sidecar_cover 同名封面」两种口径删除，
+       与入库时的伴随文件口径完全一致；同名不同后缀的视频一律不碰；
+    4. 每个删除目标 resolve 后校验其父目录仍位于对应扫描根之内。
+    删除即物理删除（不可恢复），调用方需先在前端二次确认。
+    """
+    video_path = Path(payload.path)
+    # ① 必须是扫描缓存表记录过的路径
+    row = db.scalar(select(IncomingFile).where(IncomingFile.file_path == payload.path))
+    if row is None:
+        raise HTTPException(404, "该路径不在待整理列表中（可能已被扫描移除），请刷新列表")
+    if not video_path.is_file():
+        # 缓存行已无对应文件：直接清掉缓存行，返回成功（幂等）
+        db.delete(row)
+        db.commit()
+        return {"ok": True, "deleted": [], "note": "文件已不存在，仅清理了列表记录"}
+
+    # ② 视频文件必须位于某个 incoming 扫描根之内
+    video_resolved = video_path.resolve()
+    scan_roots = [Path(p).resolve() for p in settings.incoming_scan_dirs]
+    if not any(video_resolved.is_relative_to(root) for root in scan_roots):
+        raise HTTPException(400, "路径不在 incoming 目录内，拒绝删除")
+
+    deleted: list[str] = []
+    # 视频本体
+    video_resolved.unlink()
+    deleted.append(video_path.name)
+
+    # ③ 伴随文件：json 两种命名 + find_sidecar_cover 封面口径（与入库/迁移一致）
+    stem = video_resolved.stem
+    sidecars = [
+        video_resolved.with_suffix(".json"),
+        video_resolved.parent / f"{stem}.info.json",
+    ]
+    cover = find_sidecar_cover(video_resolved)
+    if cover is not None:
+        sidecars.append(cover)
+    for sub in find_sidecar_subtitles(video_resolved):
+        sidecars.append(sub)
+    seen: set[Path] = set()
+    for sidecar in sidecars:
+        try:
+            if not sidecar.is_file():
+                continue
+            resolved = sidecar.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            # 伴随文件也必须在扫描根内（resolve 后校验，防符号链接带出）
+            if not any(resolved.is_relative_to(root) for root in scan_roots):
+                continue
+            resolved.unlink()
+            deleted.append(sidecar.name)
+        except OSError as e:
+            logger.warning("伴随文件删除失败（保留原位）: %s（%s）", sidecar, e)
+
+    # 清掉缓存行
+    db.delete(row)
+    db.commit()
+    logger.info("待整理文件已删除: %s（含伴随 %d 个）", video_resolved, len(deleted) - 1)
+    return {"ok": True, "deleted": deleted}
 
 
 # ===== 存量重整：按现行规则批量纠偏 =====

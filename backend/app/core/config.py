@@ -115,9 +115,10 @@ class Settings(BaseSettings):
     # 是否放行跨站写请求（全局开关）。
     # ⚠ 设置页的开关已移除（v3.2.18），这里是**唯一**入口：只能通过环境变量
     # ALLOW_CROSS_ORIGIN_WRITES=true 开启，docker-compose.yml 已透传该变量。
-    # 默认 False 保持 CSRF 严格校验；通过内网穿透(NAS/隧道)等入口访问、
-    # 且 Origin 与 Host 不一致导致「跨站请求被拒绝」(403) 时才在部署层放开。
-    # 注意：登录态为 Cookie，放开后谨慎用于可信网络。
+    # 默认 False 保持 CSRF 严格校验。通过内网穿透/外部域名访问报 403 时，
+    # 优先把访问地址精确登记到 cors_origins（CORS_ORIGINS，逗号分隔）——
+    # 相当于只给指定域名放行；本开关会放行**所有**来源的写请求，属于
+    # 最后手段，开启后浏览器里任何恶意页面都能冒充登录态操作，慎用。
     allow_cross_origin_writes: bool = False
 
     # ===== 登录门禁 =====
@@ -204,6 +205,11 @@ class Settings(BaseSettings):
         return self.derived_dir / "avatars"
 
     @property
+    def youtube_cover_dir(self) -> Path:
+        """博主缺失视频封面本地缓存（YouTube Data API 拉取时落盘）。"""
+        return self.derived_dir / "yt-covers"
+
+    @property
     def db_path(self) -> Path:
         """SQLite 数据库文件路径。"""
         # 形如 sqlite:///./data/kpop_media.db
@@ -238,6 +244,7 @@ class Settings(BaseSettings):
             self.photo_thumb_dir,
             self.photo_upload_dir,
             self.avatar_dir,
+            self.youtube_cover_dir,
             self.db_path.parent,
         ]:
             d.mkdir(parents=True, exist_ok=True)

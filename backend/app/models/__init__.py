@@ -25,6 +25,8 @@ from app.models.auth_session import AuthSession
 from app.models.incoming_file import IncomingFile
 from app.models.entity_image import EntityImage
 from app.models.entity_field_lock import EntityFieldLock
+from app.models.external_channel_video import ExternalChannelVideo
+from app.models.video_score import VideoScore
 
 __all__ = [
     # Artist / Group / Membership
@@ -66,4 +68,8 @@ __all__ = [
     "EntityImage",
     # EntityFieldLocks（AI/站点获取字段锁）
     "EntityFieldLock",
+    # ExternalChannelVideos（博主频道投稿快照，YouTube 缺失检测）
+    "ExternalChannelVideo",
+    # VideoScore（AI 视频评分，实验功能）
+    "VideoScore",
 ]

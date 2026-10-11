@@ -140,3 +140,37 @@ def _parse_frame_rate(rate: Optional[str]) -> Optional[float]:
         return float(rate)
     except (TypeError, ValueError):
         return None
+
+
+def probe_chapters(path: str | Path) -> list[dict]:
+    """读取容器内嵌章节(MKV Chapters / MP4 章节轨);无则返回空列表。
+
+    返回原始 ffprobe chapters 项:[{start_time, end_time, tags: {title}}, ...]
+    """
+    try:
+        binary = require_ffprobe()
+    except RuntimeError as e:
+        raise ProbeError(str(e)) from e
+    path = str(path)
+    if not Path(path).exists():
+        raise ProbeError(f"文件不存在: {path}")
+
+    cmd = [binary, "-v", "error", "-print_format", "json", "-show_chapters", path]
+    try:
+        res = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=60, check=False
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ProbeError(f"ffprobe 超时: {path}") from e
+
+    if res.returncode != 0:
+        raise ProbeError(
+            f"ffprobe 失败 (code={res.returncode}): {res.stderr.strip() or '未知错误'}"
+        )
+
+    try:
+        data = json.loads(res.stdout)
+    except json.JSONDecodeError as e:
+        raise ProbeError(f"ffprobe 输出解析失败: {e}") from e
+
+    return data.get("chapters", []) or []

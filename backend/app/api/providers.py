@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.core.deps import DbDep
 from app.schemas import AlbumExternalCandidate, AlbumTracklist
 from app.schemas.provider import ProviderDetail, ProviderSearchItem, TmdbTestRequest
-from app.services import album_external_service, app_settings, external_providers, tmdb_service
+from app.services import album_external_service, app_settings, external_providers, tmdb_service, youtube_service
 from app.services.audiodb_service import ProviderError
 
 router = APIRouter(prefix="/providers", tags=["providers"])
@@ -30,6 +30,20 @@ def test_tmdb(payload: TmdbTestRequest, db: DbDep):
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"TMDB 连接失败：{e}") from e
+
+
+@router.post("/youtube/test")
+def test_youtube(payload: TmdbTestRequest, db: DbDep):
+    """测试 YouTube Data API Key 连通性（videos.list 单条，1 quota，不落库）。"""
+    key = (payload.api_key or "").strip()
+    if not key:
+        key = (app_settings.read_all(db).youtube.api_key or "").strip()
+    try:
+        return youtube_service.test_connection(key)
+    except ProviderError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"YouTube 连接失败：{e}") from e
 
 
 @router.get("/albums/search", response_model=List[AlbumExternalCandidate])
