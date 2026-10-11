@@ -33,6 +33,18 @@ function toggleOnlyWithVideos() {
   load(1)
 }
 
+// ===== 排序(选择存 localStorage) =====
+const SONGS_SORT_KEY = 'songs:sort'
+const songsSort = ref<'default' | 'videos_desc' | 'videos_asc' | 'name' | '-name'>(
+  (localStorage.getItem(SONGS_SORT_KEY) as 'default' | 'videos_desc' | 'videos_asc' | 'name' | '-name') || 'default',
+)
+
+function onSortChange(e: Event) {
+  songsSort.value = (e.target as HTMLSelectElement).value as 'default' | 'videos_desc' | 'videos_asc' | 'name' | '-name'
+  localStorage.setItem(SONGS_SORT_KEY, songsSort.value)
+  load(1)
+}
+
 const palettes: [string, string][] = [
   ['#2a2140', '#15151b'],
   ['#22242a', '#15151b'],
@@ -70,6 +82,7 @@ async function load(targetPage: number) {
       page: targetPage,
       page_size: pageSize,
       only_with_videos: onlyWithVideos.value || undefined,
+      sort: songsSort.value === 'default' ? undefined : songsSort.value,
     })
     items.value = res.items
     total.value = res.total
@@ -118,6 +131,17 @@ onMounted(() => load(1))
           >
             {{ onlyWithVideos ? '仅有关联视频' : '显示全部歌曲' }}
           </button>
+          <select
+            class="sort-select"
+            :value="songsSort"
+            @change="onSortChange"
+          >
+            <option value="default">默认排序</option>
+            <option value="videos_desc">视频数（多→少）</option>
+            <option value="videos_asc">视频数（少→多）</option>
+            <option value="name">名称 A→Z</option>
+            <option value="-name">名称 Z→A</option>
+          </select>
           <input
             v-model="searchInput"
             class="search-input"
@@ -212,6 +236,21 @@ onMounted(() => load(1))
   background: var(--sa-subtle);
   border: 1px solid var(--sa-border-subtle);
   line-height: 1.6;
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sort-select {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 8px;
+  background: var(--sa-elevated);
+  color: var(--sa-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
 }
 .head-actions {
   display: flex;

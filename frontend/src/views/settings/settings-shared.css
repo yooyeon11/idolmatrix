@@ -155,6 +155,127 @@
 .incoming-refresh:disabled {
   opacity: 0.5;
 }
+/* 列表头右侧工具组：排序下拉 + 刷新按钮 */
+.incoming-head-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.incoming-sort {
+  height: 26px;
+  max-width: 130px;
+  padding: 0 6px;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 7px;
+  background: var(--sa-subtle);
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.incoming-sort:focus {
+  border-color: var(--sa-accent);
+}
+/* 翻唱自：艺人/组合类型切换小按钮 */
+.coverfrom-kind {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.coverfrom-kind button {
+  padding: 3px 12px;
+  border: none;
+  background: var(--sa-subtle);
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.coverfrom-kind button + button {
+  border-left: 1px solid var(--sa-border-subtle);
+}
+.coverfrom-kind button.on {
+  background: var(--sa-accent);
+  color: #fff;
+}
+
+/* 健康警示行：缺 json / 缺封面 / 疑似残缺文件 */
+.incoming-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  color: #f05252;
+  font-size: 12px;
+  line-height: 1.3;
+}
+:root[data-theme='light'] .incoming-warn {
+  color: #d93025;
+}
+/* 已入库对比（列表行）：命中库内副本时的分辨率 / 体积速览 */
+.incoming-dup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  color: #c9a96e;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.incoming-dup em {
+  font-style: normal;
+  font-weight: 600;
+}
+:root[data-theme='light'] .incoming-dup {
+  color: #8a6d3b;
+}
+/* 已入库对比（详情卡）：本视频 vs 库内副本，帮助决定留哪份 */
+.dup-compare {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(201, 169, 110, 0.35);
+  border-radius: 12px;
+  background: rgba(201, 169, 110, 0.08);
+  font-size: 13px;
+}
+.dup-compare-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.dup-compare-title {
+  font-weight: 600;
+  color: #c9a96e;
+}
+.dup-compare-link {
+  font-size: 12px;
+  color: var(--sa-accent);
+}
+.dup-compare-row {
+  display: flex;
+  gap: 10px;
+  padding: 2px 0;
+  color: var(--sa-text-primary);
+}
+.dup-compare-row .dup-k {
+  flex: none;
+  width: 64px;
+  color: var(--sa-text-tertiary);
+}
+.dup-compare-verdict {
+  margin-top: 8px;
+  font-weight: 600;
+  color: #c9a96e;
+}
+:root[data-theme='light'] .dup-compare-title,
+:root[data-theme='light'] .dup-compare-verdict {
+  color: #8a6d3b;
+}
 .incoming-empty {
   padding: 28px 0;
   text-align: center;
@@ -237,6 +358,39 @@
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
+}
+/* 删除按钮：钉在头部最右（margin-left:auto），与底部入库按钮远离 */
+.detail-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  margin-left: auto;
+  padding: 0 14px;
+  border: 1px solid rgba(240, 82, 82, 0.4);
+  border-radius: 999px;
+  background: transparent;
+  color: #f05252;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex: none;
+}
+.detail-delete:hover:not(:disabled) {
+  background: #f05252;
+  color: #fff;
+}
+.detail-delete:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+:root[data-theme='light'] .detail-delete {
+  color: #d93025;
+  border-color: rgba(217, 48, 37, 0.45);
+}
+:root[data-theme='light'] .detail-delete:hover:not(:disabled) {
+  background: #d93025;
+  color: #fff;
 }
 .detail-back {
   display: inline-flex;
@@ -460,6 +614,10 @@
   color: var(--sa-text-tertiary);
   cursor: not-allowed;
   background: var(--sa-elevated);
+}
+/* 标题规范这类整段多行提示词：给足可视高度，减少滚动 */
+.sa-textarea--tall {
+  min-height: 220px;
 }
 .form-check {
   display: flex;

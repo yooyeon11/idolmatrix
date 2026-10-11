@@ -2,6 +2,8 @@ import http from './index'
 import type { AxiosRequestConfig } from 'axios'
 import type {
   FolderBrowseResult,
+  VideoChapter,
+  VideoScore,
   MusicVideo,
   MusicVideoBrief,
   MessageResponse,
@@ -18,6 +20,15 @@ export interface CoverFrameItem {
 
 export interface CoverFramesResponse {
   items: CoverFrameItem[]
+}
+
+/** 外挂同名字幕轨（后端统一转 VTT 出流）；url 可直接喂 <track src> */
+export interface VideoSubtitleTrack {
+  index: number
+  label: string
+  language: string
+  url: string
+  default: boolean
 }
 
 export interface ListParams {
@@ -62,6 +73,11 @@ export const musicVideosApi = {
     return http.get<Pagination<MusicVideo>>('/music-videos', { params, ...config }).then((r) => r.data)
   },
   listAll: listAllVideos,
+  subtitles(id: number) {
+    return http
+      .get<{ items: VideoSubtitleTrack[] }>(`/music-videos/${id}/subtitles`)
+      .then((r) => r.data)
+  },
   folderBrowse(params: {
     prefix?: string
     q?: string
@@ -97,6 +113,13 @@ export const musicVideosApi = {
   brief(params: { video_type?: string; ingestion_status?: string; limit?: number } = {}) {
     return http.get<MusicVideoBrief[]>('/music-videos/brief', { params }).then((r) => r.data)
   },
+  /**
+   * 随机短视频 feed（刷模式）：与短视频页同口径（library + is_short）。
+   * exclude_ids 传本会话已刷过的 id 避免重复；返回空 = 池子刷穿。
+   */
+  feed(params: { count?: number; exclude_ids?: string } = {}) {
+    return http.get<MusicVideo[]>('/music-videos/feed', { params }).then((r) => r.data)
+  },
   get(id: number) {
     return http.get<MusicVideo>(`/music-videos/${id}`).then((r) => r.data)
   },
@@ -122,6 +145,27 @@ export const musicVideosApi = {
     if (bust != null && bust !== '') params.set('v', String(bust))
     if (w) params.set('w', String(w))
     return `/api/music-videos/${id}/thumbnail?${params.toString()}`
+  },
+  /** 视频章节（实验性,只读推导):内嵌章节优先,简介时间轴兜底 */
+  chapters(id: number) {
+    return http
+      .get<{ count: number; items: VideoChapter[] }>(`/music-videos/${id}/chapters`)
+      .then((r) => r.data)
+  },
+  // ===== AI 视频评分（实验功能） =====
+  /** 对单条视频执行 AI 评分（抽帧送视觉模型）。creds 为用户配置的评分 AI 凭据。 */
+  aiScore(
+    id: number,
+    creds: { provider: string; base_url: string; api_key?: string; model: string; frames_mode?: string },
+  ) {
+    return http
+      .post<VideoScore>(`/music-videos/${id}/ai-score`, creds, { timeout: 320_000 })
+      .then((r) => r.data)
+  },
+  latestAiScore(id: number) {
+    return http
+      .get<VideoScore | null>(`/music-videos/${id}/ai-score`)
+      .then((r) => r.data)
   },
   // ===== 手动选帧封面 =====
   coverFrameUrl(id: number, name: string) {

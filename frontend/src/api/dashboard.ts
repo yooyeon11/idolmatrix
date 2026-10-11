@@ -11,6 +11,18 @@ export const dashboardApi = {
   recap() {
     return http.get<StatsRecap>('/stats/recap').then((r) => r.data)
   },
+  /** 艺人轨迹（实验性）：主体 × 月份入库条数，堆叠柱与热度榜共用 */
+  artistTrend(params: { by: 'created' | 'performance'; months?: number; limit?: number }) {
+    return http
+      .get<{
+        by: string
+        months: string[]
+        series: { kind: string; id: number | null; name: string; uid: string | null; data: number[] }[]
+        heat_month: string | null
+        coverage: { with_date: number; total: number } | null
+      }>('/stats/artist-trend', { params })
+      .then((r) => r.data)
+  },
   watchPing(payload: {
     music_video_id: number
     position?: number

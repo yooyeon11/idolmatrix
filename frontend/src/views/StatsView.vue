@@ -5,8 +5,10 @@ import { useMessage } from 'naive-ui'
 import SaHeader from '@/components/SaHeader.vue'
 import StatsChapter from '@/components/StatsChapter.vue'
 import StatsClock from '@/components/StatsClock.vue'
+import StatsDonut from '@/components/StatsDonut.vue'
 import StatsHeatmap from '@/components/StatsHeatmap.vue'
 import StatsSummaryCard from '@/components/StatsSummaryCard.vue'
+import StatsTrend from '@/components/StatsTrend.vue'
 import { dashboardApi } from '@/api/dashboard'
 import { artistsApi } from '@/api/artists'
 import { groupsApi } from '@/api/groups'
@@ -20,6 +22,8 @@ import {
 } from '@/types/models'
 import { formatFileSize } from '@/utils/format'
 import { artistPath, groupPath, videoPath } from '@/utils/routes'
+import { concertProfile } from '@/utils/concertFacts'
+import { cssVar } from '@/utils/echarts'
 
 // 统计页 —— 「个人年度刊物」式推翻重建：
 // 封面 → 八章正文（一屏一事）→ 终章封底卡。
@@ -88,15 +92,14 @@ const topGroup = computed(() => topGroups.value[0])
 const runnerUps = computed(() => topGroups.value.slice(1, 5))
 
 // ===== 01 文案（时长类比用年度主角冠名，故放在 02 之后） =====
-// 参照物：一场演唱会 ≈ 2.5 小时；一部音乐电影 ≈ 110 分钟；一轮巡演 ≈ 30 场
-const CONCERT_HOURS = 2.5
-const MUSIC_FILM_HOURS = 110 / 60
-const TOUR_HOURS = CONCERT_HOURS * 30
+// 演唱会/巡演的折算参数随冠名组合走（concertFacts.ts）：全员大团一场 4 小时起、
+// 小团 2 小时上下，巡演规模差一倍不止，写死一个值对谁都不准
 
 function humanCount(n: number) {
   if (n >= 100) return Math.round(n).toLocaleString()
   if (n >= 10) return String(Math.round(n))
-  return (Math.round(n * 10) / 10).toFixed(1)
+  // 10 以下保留一位小数，但别出「1.0」这种尾零
+  return (Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '')
 }
 
 const overviewChapterTitle = computed(() =>
@@ -105,36 +108,37 @@ const overviewChapterTitle = computed(() =>
 const countNote = computed(() => (range.value === 'year' ? '这一年保存的影像' : '这些年保存的影像'))
 const sizeNote = '硬盘里的全部家当'
 
-// 把总时长换成人有体感的节点：几场演唱会 / 几部音乐电影 / 几次巡演
+// 总时长折算成一句类比：平时「相当于 X 场演唱会」，
+// 够该组合一轮巡演的量级（场时长 × 巡演场数）就换成「相当于 X 次巡演」；
+// 连一场都不到就不显示类比（大数字本身已经是 分钟/小时），不出 0.几这种值
+const concertRef = computed(() =>
+  concertProfile(topGroup.value?.name, topGroup.value?.chinese_name),
+)
 const durationAnalogy = computed(() => {
   const seconds = overview.value?.total_duration_seconds || 0
-  if (seconds <= 0) return '连起来能放这么久'
+  if (seconds <= 0) return ''
   const hours = seconds / 3600
+  const ref = concertRef.value
   const headliner = topGroup.value ? displayName(topGroup.value) : ''
-  const shows = hours / CONCERT_HOURS
-  if (shows < 1) return '还不够一场演唱会'
-  const showsLabel = headliner ? `场 ${headliner} 演唱会` : '场演唱会'
-  const parts = [`≈ ${humanCount(shows)} ${showsLabel}`]
-  if (hours / TOUR_HOURS >= 1) parts.push(`≈ ${Math.max(1, Math.round(hours / TOUR_HOURS))} 次巡演`)
-  else if (hours / MUSIC_FILM_HOURS >= 2) parts.push(`≈ ${humanCount(hours / MUSIC_FILM_HOURS)} 部音乐电影`)
-  return parts.join(' · ')
+  const tourHours = ref.hours * ref.tourShows
+  if (hours >= tourHours) {
+    // 巡演一律取整，不出小数（四舍五入，至少 1 次）
+    const tours = Math.max(1, Math.round(hours / tourHours))
+    return headliner ? `相当于 ${tours} 次 ${headliner} 巡演` : `相当于 ${tours} 次巡演`
+  }
+  const shows = hours / ref.hours
+  if (shows < 1) return ''
+  const label = humanCount(shows)
+  return headliner ? `相当于 ${label} 场 ${headliner} 演唱会` : `相当于 ${label} 场演唱会`
 })
 
-// ===== 03 年度艺人（口径=参演 ∪ 直拍对象） =====
+// ===== 03 年度艺人（口径=参演关联） =====
 const topArtists = computed(() => data.value?.artists || [])
 const topArtist = computed(() => topArtists.value[0])
 const artistRunnerUps = computed(() => topArtists.value.slice(1, 5))
 
 function goArtist(uid: string) {
   router.push(artistPath(uid))
-}
-
-// ===== 04 镜头焦点（直拍对象，纯 subject_artist_id 口径） =====
-const topSubjects = computed(() => data.value?.subject_artists || [])
-const topSubject = computed(() => topSubjects.value[0])
-const subjectMax = computed(() => Math.max(1, ...topSubjects.value.map((r) => r.video_count)))
-function subjectBar(count: number) {
-  return `${Math.max(6, (count / subjectMax.value) * 100)}%`
 }
 
 // ===== 章节文案随口径 =====
@@ -150,33 +154,25 @@ const artistChapterTitle = computed(() => {
     ? `${yearLabel.value} 的镜头常客是 ${displayName(topArtist.value)}`
     : `开馆以来，镜头常客是 ${displayName(topArtist.value)}`
 })
-const subjectChapterTitle = computed(() => {
-  if (!topSubject.value) return ''
-  return range.value === 'year'
-    ? `${yearLabel.value} 你把镜头对准 ${displayName(topSubject.value)} 最多`
-    : `开馆以来，${displayName(topSubject.value)} 站在镜头正中`
-})
 
-// ===== 03 收藏节奏 =====
+// ===== 04 收藏节奏 =====
 const heatTotal = computed(() =>
   (recap.value?.heatmap || []).reduce((n, d) => n + d.count, 0),
 )
 
-// ===== 04 类型构成：Top4 + 其他 =====
-// 图表系列色从主题 CSS 变量读取，跟随基础设置的强调色切换
+// ===== 05 收藏构成·类型：Top4 + 其他 =====
+// 分类色板：主题强调色打头，后面跟固定邻近视色，保证多分类区分度；「其他」恒为中性灰。
+// 强调色/主题切换时 computed 重新取 CSS 变量，图表随 props 变化整体重建（useEChart）。
 const themeStore = useThemeStore()
-const TYPE_COLORS = computed<string[]>(() => {
+const accentColor = computed(() => {
   void themeStore.accent
-  const cs = getComputedStyle(document.documentElement)
-  const read = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback
-  return [
-    read('--sa-series-1', '#0485f7'),
-    read('--sa-series-2', '#48a0ff'),
-    read('--sa-series-3', '#78bbff'),
-    read('--sa-series-4', '#a8d5ff'),
-  ]
+  return cssVar('--sa-accent', '#0485f7')
 })
-const OTHER_COLOR = '#d3d6de'
+const CATEGORICAL_COLORS = ['#14b8d4', '#7c66ff', '#f5a623', '#34c77b', '#f06292', '#8d9bab']
+const otherColor = computed(() => {
+  void themeStore.mode
+  return themeStore.mode === 'dark' ? '#3f4655' : '#c9cfda'
+})
 interface TypeRow {
   key: string
   label: string
@@ -185,7 +181,7 @@ interface TypeRow {
   color: string
 }
 
-/** 两色线性插值（用于按主题强调色生成色阶）。 */
+/** 两色线性插值（分辨率档位的单色阶用）。 */
 function mixHex(from: string, to: string, t: number): string {
   const parse = (hex: string) => {
     const s = hex.trim().replace('#', '')
@@ -199,19 +195,6 @@ function mixHex(from: string, to: string, t: number): string {
   const b = parse(to)
   const mix = a.map((v, i) => Math.round(v + (b[i] - v) * t))
   return `#${mix.map((v) => v.toString(16).padStart(2, '0')).join('')}`
-}
-
-/** 取 n 个色阶：n ≤ 锚点数直接用主题系列色，更多则在锚点之间插值补足。 */
-function rampColors(anchors: string[], n: number): string[] {
-  if (n <= 0) return []
-  if (n === 1) return [anchors[0]]
-  if (n <= anchors.length) return anchors.slice(0, n)
-  const segs = anchors.length - 1
-  return Array.from({ length: n }, (_, i) => {
-    const t = (i / (n - 1)) * segs
-    const idx = Math.min(Math.floor(t), segs - 1)
-    return mixHex(anchors[idx], anchors[idx + 1], t - idx)
-  })
 }
 
 const typeRows = computed<TypeRow[]>(() => {
@@ -229,31 +212,24 @@ const typeRows = computed<TypeRow[]>(() => {
     .map((o) => ({ key: o.value as string, label: o.label, count: counts.get(o.value) || 0 }))
     .sort((a, b) => b.count - a.count)
   const total = items.reduce((n, t) => n + t.count, 0) || 1
-  const colors = rampColors(TYPE_COLORS.value, items.length)
-  return items.map((t, i) => ({
-    ...t,
-    pct: Math.round((t.count / total) * 100),
-    color: colors[i] || OTHER_COLOR,
-  }))
-})
-const typeTotal = computed(() => typeRows.value.reduce((n, t) => n + t.count, 0))
-
-/** 把「有序排列、各带颜色」的行拼成 conic-gradient —— 类型构成与分辨率构成共用同一个环形图。 */
-function conicGradient(rows: { count: number; color: string }[]): Record<string, string> {
-  const total = rows.reduce((n, r) => n + r.count, 0)
-  if (!total) return {}
-  let acc = 0
-  const parts = rows.map((r) => {
-    const start = (acc / total) * 100
-    acc += r.count
-    return `${r.color} ${start}% ${(acc / total) * 100}%`
+  const palette = [accentColor.value, ...CATEGORICAL_COLORS]
+  let ci = 0
+  return items.map((t) => {
+    // 「其他视频」不属于任何分类，永远给中性灰，不占分类色
+    const isOther = t.key === 'Other'
+    const color = isOther ? otherColor.value : palette[ci++] ?? otherColor.value
+    return {
+      ...t,
+      pct: Math.round((t.count / total) * 100),
+      color,
+    }
   })
-  return { background: `conic-gradient(${parts.join(', ')})` }
-}
+})
+const typeDonutRows = computed(() =>
+  typeRows.value.map((t) => ({ name: t.label, value: t.count, color: t.color })),
+)
 
-const roseStyle = computed(() => conicGradient(typeRows.value))
-
-// ===== 04b 分辨率构成 =====
+// ===== 05b 收藏构成·分辨率 =====
 interface ResolutionRow {
   key: string
   label: string
@@ -282,19 +258,21 @@ const resolutionRows = computed<ResolutionRow[]>(() => {
   )
   const total = items.reduce((n, r) => n + r.count, 0)
   if (!total) return []
-  const base = TYPE_COLORS.value[0]
+  const base = accentColor.value
   return items.map((r) => {
     const tint = RES_TINT[r.key]
     return {
       ...r,
       pct: Math.round((r.count / total) * 100),
-      color: tint == null ? OTHER_COLOR : mixHex(base, '#ffffff', tint),
+      color: tint == null ? otherColor.value : mixHex(base, '#ffffff', tint),
     }
   })
 })
 
-const resolutionTotal = computed(() => resolutionRows.value.reduce((n, r) => n + r.count, 0))
-const resRoseStyle = computed(() => conicGradient(resolutionRows.value))
+// 分辨率是有序档位 → 单色阶（强调色向白插值，档位越高越深）
+const resDonutRows = computed(() =>
+  resolutionRows.value.map((r) => ({ name: r.label, value: r.count, color: r.color })),
+)
 
 const resolutionTop = computed(() =>
   resolutionRows.value.reduce<ResolutionRow | null>(
@@ -312,11 +290,7 @@ const resolutionNote = computed(() => {
   return parts.join(' · ')
 })
 
-const resolutionAria = computed(() =>
-  resolutionRows.value.map((r) => `${r.label} ${r.count} 条`).join('，'),
-)
-
-// ===== 05 观看习惯 =====
+// ===== 06 观看习惯 =====
 const watchBlock = computed(() => data.value?.watch)
 function padHour(n: number) {
   return String(n).padStart(2, '0')
@@ -326,7 +300,13 @@ const watchTitle = computed(() => {
   return p == null ? '还没有观看记录' : `你最常在 ${padHour(p)}:00 打开舞台`
 })
 
-// ===== 06 排行榜 =====
+// ===== 08 艺人轨迹（实验功能） =====
+const trendBy = ref<'created' | 'performance'>('created')
+const trendTitle = computed(() =>
+  trendBy.value === 'created' ? '过去一年，你在收谁' : '过去一年，谁在活动',
+)
+
+// ===== 07 排行榜 =====
 const RANK_TYPE_LABEL: Record<string, string> = {
   groups: '组合',
   artists: '艺人',
@@ -489,7 +469,7 @@ function goGroup(uid: string) {
               <div class="bignum-value">
                 <b>{{ durationBig.num }}</b><span>{{ durationBig.unit }}</span>
               </div>
-              <p class="bignum-note">{{ durationAnalogy }}</p>
+              <p v-if="durationAnalogy" class="bignum-note">{{ durationAnalogy }}</p>
             </div>
             <div class="bignum">
               <div class="bignum-value">
@@ -547,7 +527,7 @@ function goGroup(uid: string) {
           </div>
         </StatsChapter>
 
-        <!-- 03 艺人（参演 ∪ 直拍对象口径） -->
+        <!-- 03 艺人（参演关联口径） -->
         <StatsChapter
           v-if="topArtist"
           no="03"
@@ -594,112 +574,49 @@ function goGroup(uid: string) {
           </div>
         </StatsChapter>
 
-        <!-- 04 镜头焦点（直拍对象口径） -->
+        <!-- 04 收藏节奏 -->
         <StatsChapter
-          v-if="topSubjects.length"
           no="04"
-          kicker="镜头焦点"
-          :title="subjectChapterTitle"
-        >
-          <ol class="rank-list">
-            <li v-for="(row, i) in topSubjects.slice(0, 5)" :key="`subject-${row.id}`">
-              <button
-                class="rank-row"
-                :class="{ 'rank-row--top': i === 0 }"
-                type="button"
-                @click="goArtist(row.uid)"
-              >
-                <span class="rank-n">{{ i + 1 }}</span>
-                <span class="rank-avatar">
-                  <img
-                    v-if="row.avatar_path && !brokenAvatars.has(`subject-${row.id}`)"
-                    :src="artistsApi.avatarUrl(row.id)"
-                    :alt="displayName(row)"
-                    @error="onAvatarError(row, 'subject')"
-                  />
-                  <span v-else>{{ initialOf(row) }}</span>
-                </span>
-                <span class="rank-body">
-                  <span class="rank-name">{{ displayName(row) }}</span>
-                  <span class="rank-bar">
-                    <span class="rank-fill" :style="{ width: subjectBar(row.video_count) }" />
-                  </span>
-                </span>
-                <span class="rank-meta">
-                  <b>{{ row.video_count }}</b>
-                  <small>条</small>
-                </span>
-              </button>
-            </li>
-          </ol>
-          <p class="focus-note">口径：仅统计「直拍对象」，不含参演关联；点按查看艺人页</p>
-        </StatsChapter>
-
-        <!-- 05 收藏节奏 -->
-        <StatsChapter
-          no="03"
           kicker="收藏节奏"
           :title="`过去 365 天，你收了 ${heatTotal} 条影像`"
         >
           <StatsHeatmap :days="recap?.heatmap || []" />
         </StatsChapter>
 
-        <!-- 06 收藏构成 -->
+        <!-- 05 收藏构成 -->
         <StatsChapter
           v-if="typeRows.length"
-          no="06"
+          no="05"
           kicker="收藏构成"
           :title="`你收的最多的是${typeRows[0].label}，占 ${typeRows[0].pct}%`"
         >
-          <div class="mix">
-            <div class="rose" :style="roseStyle">
-              <div class="rose-core">
-                <b>{{ typeTotal }}</b>
-                <span>条舞台</span>
+          <div class="mix-grid">
+            <section class="mixblock">
+              <div class="resblock-head">
+                <span>视频类型</span>
+                <em>按类型计次：一条视频可属多类，各分类之和可能大于视频总数</em>
               </div>
-            </div>
-            <ul class="mix-legend">
-              <li v-for="t in typeRows" :key="t.key">
-                <i :style="{ background: t.color }" />
-                <span>{{ t.label }}</span>
-                <b>{{ t.count }}</b>
-                <em>{{ t.pct }}%</em>
-              </li>
-            </ul>
-          </div>
+              <StatsDonut :rows="typeDonutRows" center-sub="条舞台" />
+            </section>
 
-          <div v-if="resolutionRows.length" class="resblock">
-            <div class="resblock-head">
-              <span>分辨率</span>
-              <em>{{ resolutionNote }}</em>
-            </div>
-            <div class="mix">
-              <div
-                class="rose"
-                :style="resRoseStyle"
-                role="img"
-                :aria-label="`分辨率构成：${resolutionAria}`"
-              >
-                <div class="rose-core">
-                  <b>{{ resolutionTotal }}</b>
-                  <span>条影像</span>
-                </div>
+            <section v-if="resolutionRows.length" class="mixblock">
+              <div class="resblock-head">
+                <span>分辨率</span>
+                <em>{{ resolutionNote }}</em>
               </div>
-              <ul class="mix-legend">
-                <li v-for="r in resolutionRows" :key="r.key">
-                  <i :style="{ background: r.color }" />
-                  <span>{{ r.label }}</span>
-                  <b>{{ r.count }}</b>
-                  <em>{{ r.pct }}%</em>
-                </li>
-              </ul>
-            </div>
+              <StatsDonut :rows="resDonutRows" center-sub="条影像" />
+            </section>
           </div>
         </StatsChapter>
 
-        <!-- 07 观看习惯 -->
-        <StatsChapter no="07" kicker="观看时间" :title="watchTitle">
-          <StatsClock :hours="recap?.clock || []" :peak-hour="recap?.clock_peak_hour ?? null" />
+        <!-- 06 观看习惯 -->
+        <StatsChapter no="06" kicker="观看时间" :title="watchTitle">
+          <StatsClock
+            :hours="recap?.clock || []"
+            :peak-hour="recap?.clock_peak_hour ?? null"
+            :weekdays="recap?.weekdays || []"
+            :peak-weekday="recap?.peak_weekday ?? null"
+          />
           <p v-if="(watchBlock?.play_count || 0) > 0" class="watch-kpis">
             看了 <b>{{ watchBlock?.play_count ?? 0 }}</b> 次
             · 共 {{ formatTotalDuration(watchBlock?.seconds_watched) }}
@@ -707,8 +624,8 @@ function goGroup(uid: string) {
           </p>
         </StatsChapter>
 
-        <!-- 08 排行榜 -->
-        <StatsChapter no="08" kicker="排行榜" :title="rankTitle">
+        <!-- 07 排行榜 -->
+        <StatsChapter no="07" kicker="排行榜" :title="rankTitle">
           <div class="rank-tabs">
             <div class="seg" role="tablist">
               <button
@@ -772,6 +689,11 @@ function goGroup(uid: string) {
             </li>
           </ol>
           <p v-else class="empty">这个维度还没有可展示的内容</p>
+        </StatsChapter>
+
+        <!-- 08 艺人轨迹（实验功能） -->
+        <StatsChapter no="08" kicker="艺人轨迹 · 实验功能" :title="trendTitle">
+          <StatsTrend v-model:by="trendBy" />
         </StatsChapter>
 
         <!-- 终端 · 封底 -->
@@ -860,13 +782,6 @@ function goGroup(uid: string) {
   background: color-mix(in srgb, var(--sa-accent) 12%, transparent);
   font-weight: 600;
 }
-/* 镜头焦点章口径说明 */
-.focus-note {
-  margin: 14px 0 0;
-  font-size: 12px;
-  color: var(--sa-text-tertiary);
-}
-
 /* ===== 正文：章节流 ===== */
 .report {
   display: flex;
@@ -1044,82 +959,19 @@ function goGroup(uid: string) {
   white-space: nowrap;
 }
 
-/* ===== 04 类型构成 ===== */
-.mix {
-  display: flex;
-  align-items: center;
-  gap: 48px;
-  margin-top: 8px;
-}
-.rose {
-  flex: none;
-  width: 180px;
-  height: 180px;
-  border-radius: 50%;
-  position: relative;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
-}
-.rose-core {
-  position: absolute;
-  inset: 20%;
-  border-radius: 50%;
-  background: var(--sa-elevated);
+/* ===== 05 收藏构成 =====
+   环形图本体由 StatsDonut（ECharts）渲染；
+   这里只留两块布局：并列网格 + 各自的小标题行。 */
+.mix-grid {
   display: grid;
-  place-content: center;
-  text-align: center;
+  gap: 28px;
 }
-.rose-core b {
-  font-size: 1.6rem;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-}
-.rose-core span {
-  font-size: 11px;
-  color: var(--sa-text-tertiary);
-}
-.mix-legend {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-  max-width: 420px;
-}
-.mix-legend li {
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto auto;
-  gap: 10px;
-  align-items: center;
-  font-size: 13px;
-}
-.mix-legend i {
-  width: 10px;
-  height: 10px;
-  border-radius: 99px;
-}
-.mix-legend span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mix-legend b {
-  font-variant-numeric: tabular-nums;
-}
-.mix-legend em {
-  color: var(--sa-text-tertiary);
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 分辨率构成（同章节第二个统计块） */
-.resblock {
-  margin-top: 30px;
-  padding-top: 24px;
-  border-top: 1px solid var(--sa-border-subtle);
+@media (min-width: 900px) {
+  .mix-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 40px;
+  }
 }
 .resblock-head {
   display: flex;
@@ -1140,13 +992,8 @@ function goGroup(uid: string) {
   color: var(--sa-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
-/* 分辨率用的也是 .mix（环形图 + 图例），与类型构成同一套排版；
-   这里只清掉 .mix 自带的顶部间距（标题行已给了 margin-bottom）。 */
-.resblock .mix {
-  margin-top: 0;
-}
 
-/* ===== 05 观看习惯 ===== */
+/* ===== 06 观看习惯 ===== */
 .watch-kpis {
   margin: 18px 0 0;
   font-size: 13px;
@@ -1157,7 +1004,7 @@ function goGroup(uid: string) {
   color: var(--sa-text-primary);
 }
 
-/* ===== 06 排行榜 ===== */
+/* ===== 07 排行榜 ===== */
 .rank-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -1271,7 +1118,7 @@ function goGroup(uid: string) {
 .rank-bar {
   display: block;
   margin-top: 7px;
-  height: 4px;
+  height: 6px;
   border-radius: 99px;
   background: var(--sa-subtle);
   overflow: hidden;
@@ -1280,7 +1127,18 @@ function goGroup(uid: string) {
   display: block;
   height: 100%;
   border-radius: 99px;
-  background: var(--sa-accent);
+  /* 与观看时钟柱同语言：强调色纵向渐变；Top1 行更亮（accent-2 → accent） */
+  background: linear-gradient(90deg, var(--sa-accent-2), var(--sa-accent));
+  /* 切换排行维度（tab 重挂载）时条从 0 长出来，与 ECharts 入场动画呼应 */
+  animation: rankGrow 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes rankGrow {
+  from {
+    width: 0;
+  }
+}
+.rank-row:not(.rank-row--top) .rank-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--sa-accent) 80%, transparent), color-mix(in srgb, var(--sa-accent) 45%, transparent));
 }
 .rank-meta {
   display: flex;
@@ -1345,32 +1203,16 @@ function goGroup(uid: string) {
   .yeartop-sub {
     white-space: normal;
   }
-  .mix {
-    flex-direction: column;
-    align-items: center;
-    gap: 28px;
-  }
-  .mix-legend {
-    width: 100%;
-    max-width: none;
-  }
-  .resblock {
-    margin-top: 24px;
-    padding-top: 20px;
-  }
-  /* 分辨率环形图：窄屏跟类型图一样「环在上、图例在下」，环略小一档省高度 */
-  .resblock .mix {
-    gap: 20px;
-  }
-  .resblock .rose {
-    width: 150px;
-    height: 150px;
-  }
-  .resblock .mix-legend li {
-    font-size: 12px;
+  /* 构成块在窄屏上下堆叠：第二个块与第一个拉开距离 */
+  .mixblock + .mixblock {
+    margin-top: 4px;
   }
   .rank-tabs {
     gap: 8px;
+  }
+  /* 手机宽度下收窄按钮内边距：观看榜的 4 个维度 + 收藏/观看切换要收进一行 */
+  .seg-btn {
+    padding: 6px 10px;
   }
   .rank-row {
     grid-template-columns: 22px 40px minmax(0, 1fr) auto;

@@ -213,17 +213,20 @@ export function useEntityDetail<T extends EntityLike>(
     localStorage.setItem(VIDEO_SORT_STORAGE_KEY, v)
   })
 
-  // 歌曲筛选候选：当前实体全部视频出现过的歌曲（song_id / song_ids / songs / tracks 去重）
+  // 歌曲筛选候选：当前实体全部视频出现过的歌曲（song_id / song_ids / songs / tracks 去重）。
+  // 命名纪律：songs[] 的真名最先占位（后端 songs[] 恰好覆盖所有存活曲目的歌）；
+  // 冗余的 song_name 只允许兜底 song_id 本身（对应曲目首歌被软删、songs[] 里没有它的情况）；
+  // 其余一律「歌曲 #id」——绝不让主歌名顶替串烧里的其他歌（曾把整场串烧每首都标成主歌名）。
   const videoSongOptions = computed<VideoSongOption[]>(() => {
     const byId = new Map<number, string>()
     for (const v of videos.value) {
       const push = (id: number | null | undefined, name?: string | null) => {
         if (id == null || byId.has(id)) return
-        byId.set(id, name || v.song_name || `歌曲 #${id}`)
+        byId.set(id, name || `歌曲 #${id}`)
       }
+      for (const s of v.songs || []) push(s.id, s.name)
       push(v.song_id, v.song_name)
       for (const id of v.song_ids || []) push(id)
-      for (const s of v.songs || []) push(s.id, s.name)
       for (const t of v.tracks || []) push(t.song_id)
     }
     return [...byId.entries()]

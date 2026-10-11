@@ -7,6 +7,7 @@ import type {
   AppMtPhotosSettings,
   AppSettings,
   AppTmdbSettings,
+  AppYoutubeSettings,
   HomeHeroImage,
   HomeStageType,
 } from '@/types/models'
@@ -14,16 +15,18 @@ import { setAppearanceChangeHook, useThemeStore } from './theme'
 import {
   aiDefaults,
   outboundDescPrompt,
+  outboundTitlePrompt,
   saveAi as cacheIngestAi,
   setAiSnapshot,
   stripLegacyAiFields,
-  withDescPromptFallback,
+  withPromptFallbacks,
   type AiSettings,
 } from '@/views/settings/aiLocal'
 
 const MTPHOTOS_KEY = 'kpml_mtphotos_settings'
 const PROXY_KEY = 'kpml_external_proxy_settings'
 const TMDB_KEY = 'kpml_tmdb_settings'
+const YOUTUBE_KEY = 'kpml_youtube_settings'
 const STORAGE_KEY = 'kpml_show_covers'
 const mtphotosDefaults: AppMtPhotosSettings = {
   enabled: false,
@@ -38,6 +41,11 @@ const externalProxyDefaults: AppExternalProxySettings = {
   url: '',
 }
 const tmdbDefaults: AppTmdbSettings = {
+  enabled: false,
+  api_key: '',
+  api_key_set: false,
+}
+const youtubeDefaults: AppYoutubeSettings = {
   enabled: false,
   api_key: '',
   api_key_set: false,
@@ -124,6 +132,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const mtphotos = ref<AppMtPhotosSettings>({ ...mtphotosDefaults })
   const externalProxy = ref<AppExternalProxySettings>({ ...externalProxyDefaults })
   const tmdb = ref<AppTmdbSettings>({ ...tmdbDefaults })
+  const youtube = ref<AppYoutubeSettings>({ ...youtubeDefaults })
   const hydrated = ref(false)
 
   function setShowCovers(v: boolean) {
@@ -199,13 +208,15 @@ export const useSettingsStore = defineStore('settings', () => {
     heroVideoIds.value = remoteIds
     homeStageType.value = remote.hero.stage_type === 'video' ? 'video' : 'artist'
     cacheHeroHomeLocal(heroVideoIds.value, homeStageType.value)
-    ingestAi.value = withDescPromptFallback({ ...aiDefaults, ...remote.ingest_ai })
+    ingestAi.value = withPromptFallbacks({ ...aiDefaults, ...remote.ingest_ai })
     mtphotos.value = { ...mtphotosDefaults, ...(remote.mtphotos || {}) }
     localStorage.setItem(MTPHOTOS_KEY, JSON.stringify({ ...mtphotos.value, api_key: '' }))
     externalProxy.value = { ...externalProxyDefaults, ...(remote.external_proxy || {}) }
     localStorage.setItem(PROXY_KEY, JSON.stringify(externalProxy.value))
     tmdb.value = { ...tmdbDefaults, ...(remote.tmdb || {}) }
     localStorage.setItem(TMDB_KEY, JSON.stringify({ ...tmdb.value, api_key: '' }))
+    youtube.value = { ...youtubeDefaults, ...(remote.youtube || {}) }
+    localStorage.setItem(YOUTUBE_KEY, JSON.stringify({ ...youtube.value, api_key: '' }))
     // 跨站放行开关与「内容与匹配」栏均已从产品层移除（前者只剩部署层 env，
     // 后者档位固定 strict），后端不再回传 network / ingest 分区。
     setAiSnapshot({
@@ -251,11 +262,12 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   async function saveIngestAi() {
-    // 中文简介提示词与默认文本一致时存空串 = 跟随后端内置默认（后端升级默认能自动生效）
+    // 提示词与各自默认文本一致时存空串 = 跟随后端内置默认（后端升级默认能自动生效）
     const remote = await appSettingsApi.patch({
       ingest_ai: {
         ...ingestAi.value,
         desc_prompt: outboundDescPrompt(ingestAi.value.desc_prompt),
+        title_prompt: outboundTitlePrompt(ingestAi.value.title_prompt),
       },
     })
     applyRemote(remote)
@@ -296,6 +308,16 @@ export const useSettingsStore = defineStore('settings', () => {
     await saveTmdb()
   }
 
+  async function saveYoutube() {
+    const remote = await appSettingsApi.patch({ youtube: { ...youtube.value } })
+    applyRemote(remote)
+  }
+
+  async function resetYoutube() {
+    youtube.value = { ...youtubeDefaults }
+    await saveYoutube()
+  }
+
   function scrubLocalApiKeys() {
     for (const key of [
       'kpml_ingest_ai_settings',
@@ -303,6 +325,7 @@ export const useSettingsStore = defineStore('settings', () => {
       'kpml_home_title_ai_settings',
       MTPHOTOS_KEY,
       TMDB_KEY,
+      YOUTUBE_KEY,
     ]) {
       const raw = localStorage.getItem(key)
       if (!raw) continue
@@ -373,7 +396,7 @@ export const useSettingsStore = defineStore('settings', () => {
     return { ...fallback }
   }
 
-  ingestAi.value = withDescPromptFallback(
+  ingestAi.value = withPromptFallbacks(
     stripLegacyAiFields(
       readLocalJson('kpml_ingest_ai_settings', aiDefaults, ['kpml_ai_settings']),
     ),
@@ -381,6 +404,7 @@ export const useSettingsStore = defineStore('settings', () => {
   mtphotos.value = readLocalJson(MTPHOTOS_KEY, mtphotosDefaults)
   externalProxy.value = readLocalJson(PROXY_KEY, externalProxyDefaults)
   tmdb.value = readLocalJson(TMDB_KEY, tmdbDefaults)
+  youtube.value = readLocalJson(YOUTUBE_KEY, youtubeDefaults)
   dropLegacyKeys()
   setAiSnapshot({
     ingest_ai: ingestAi.value,
@@ -403,6 +427,7 @@ export const useSettingsStore = defineStore('settings', () => {
     mtphotos,
     externalProxy,
     tmdb,
+    youtube,
     hydrated,
     setHeroVideoId,
     setHeroHome,
@@ -415,6 +440,8 @@ export const useSettingsStore = defineStore('settings', () => {
     resetExternalProxy,
     saveTmdb,
     resetTmdb,
+    saveYoutube,
+    resetYoutube,
     hydrate,
   }
 })

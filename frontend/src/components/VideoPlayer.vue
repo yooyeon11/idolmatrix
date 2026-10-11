@@ -34,6 +34,14 @@ interface Source {
   label?: string
 }
 
+/** 外挂字幕轨（后端统一转 VTT 出流） */
+export interface SubtitleTrack {
+  url: string
+  label: string
+  language?: string
+  default?: boolean
+}
+
 const emit = defineEmits<{
   /** 播放器状态变化：buffering=是否正在缓冲（转码等待中），error=错误信息 */
   (e: 'state', payload: { buffering: boolean; error: string | null }): void
@@ -89,6 +97,8 @@ const props = withDefaults(
      * 转码进行中 HLS 清单无 ENDLIST → MSE 的 duration 恒为 Infinity，
      * 窗口判定必须靠它；详见 canSeekInPlace()。由父组件轮询 /window 维护。 */
     availableUntil?: number
+    /** 外挂字幕轨列表（空 = 无字幕，控制栏不显示字幕按钮） */
+    subtitles?: SubtitleTrack[]
   }>(),
   {
     qualities: () => [],
@@ -103,6 +113,7 @@ const props = withDefaults(
     autoPlay: false,
     seekInto: 0,
     availableUntil: 0,
+    subtitles: () => [],
   },
 )
 
@@ -197,6 +208,8 @@ function qualityText(key: string): string {
 
 /** 画质菜单选中回调（由 setup 注入，插件类内部不持有 emit） */
 let onQualityPick: ((quality: string) => void) | null = null
+/** 当前选中的字幕轨：'off' | String(轨道下标)。换源/换转码窗口重建实例后保持 */
+let activeSubtitleKey = 'off'
 
 /**
  * 画质选择控件 —— 挂在 xgplayer 原生控制栏右栏的自定义控件。
@@ -322,6 +335,175 @@ function qualityPlugin(): any {
   } catch {
     return null
   }
+}
+
+// ===== 字幕选择控件（外挂同名字幕，后端统一转 VTT）=====
+
+const SUBTITLE_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="100%" height="100%" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="3" y="5" width="18" height="14" rx="2.5"/>' +
+  '<path d="M6.5 13.5h5M6.5 16h7"/>' +
+  '<path d="M14.8 13.5h2.7M15.8 16h1.7"/>' +
+  '</svg>'
+
+/** 选中回调（setup 注入）：key = 'off' | String(轨道下标) */
+let onSubtitlePick: ((key: string) => void) | null = null
+
+/**
+ * 字幕选择控件 —— 与 QualitySelector 同款的自绘控制栏控件。
+ * 不用 xgplayer 内置 texttrack 插件：它的菜单文案/交互不受控，而且我们需要
+ * 「换源/换转码窗口后记住选中、按 offset 重建轨道 URL」这些项目特有语义。
+ * 底层用原生 <track> + TextTrack.mode 切换（浏览器只认 WebVTT，后端已统一转好）。
+ */
+class SubtitleSelector extends PluginBase {
+  listEl: HTMLElement | null = null
+  docClick: ((e: Event) => void) | null = null
+
+  static get pluginName() {
+    return 'subtitleSelector'
+  }
+
+  static get defaultConfig() {
+    return {
+      position: 'controlsRight',
+      index: 5,
+      tracks: [] as SubtitleTrack[],
+      active: 'off',
+    }
+  }
+
+  render() {
+    return (
+      '<xg-icon class="xgplayer-subtitle xg-icon" tabindex="0">' +
+      '<span class="xgplayer-icon">' +
+      SUBTITLE_ICON_SVG +
+      '</span>' +
+      '<xg-subtitle-list class="xgplayer-subtitle-list"></xg-subtitle-list>' +
+      '</xg-icon>'
+    )
+  }
+
+  afterCreate() {
+    this.listEl = this.find('.xgplayer-subtitle-list')
+
+    this.docClick = (e: Event) => {
+      if (this.root && !this.root.contains(e.target as Node)) this.close()
+    }
+    document.addEventListener('click', this.docClick)
+
+    this.bind('click', (e: Event) => {
+      e.stopPropagation()
+      const picked = (e.target as HTMLElement)?.getAttribute?.('data-sub')
+      if (picked) {
+        this.close()
+        onSubtitlePick?.(picked)
+        return
+      }
+      if (this.isOpen()) this.close()
+      else this.open()
+    })
+
+    this.refresh()
+  }
+
+  destroy() {
+    if (this.docClick) document.removeEventListener('click', this.docClick)
+    this.docClick = null
+    this.listEl = null
+  }
+
+  isOpen() {
+    return !!this.root?.classList.contains('is-open')
+  }
+
+  open() {
+    this.root?.classList.add('is-open')
+    this.player?.focus?.({ autoHide: false })
+  }
+
+  close() {
+    this.root?.classList.remove('is-open')
+  }
+
+  /** 由外部（props / 选中态变化）调用，刷新列表与选中态 */
+  refresh() {
+    const tracks: SubtitleTrack[] = this.config?.tracks || []
+    const active: string = this.config?.active || 'off'
+
+    if (this.root) {
+      this.root.style.display = tracks.length ? '' : 'none'
+      this.root.setAttribute('title', '字幕')
+      if (!tracks.length) this.close()
+    }
+
+    const el = this.listEl
+    if (!el) return
+
+    const item = (key: string, label: string) =>
+      `<xg-subtitle-item class="xgplayer-subtitle-item${
+        key === active ? ' is-active' : ''
+      }" data-sub="${key}">${label}</xg-subtitle-item>`
+
+    const parts = [item('off', '关闭')]
+    tracks.forEach((t, i) => parts.push(item(String(i), t.label)))
+    el.innerHTML = parts.join('')
+  }
+}
+
+function subtitlePlugin(): any {
+  if (!player) return null
+  try {
+    return player.getPlugin?.('subtitleSelector') || player.plugins?.subtitleSelector || null
+  } catch {
+    return null
+  }
+}
+
+/** 用户在字幕菜单里选择（含「关闭」） */
+function pickSubtitle(key: string) {
+  activeSubtitleKey = key
+  applySubtitleMode()
+  syncSubtitleState()
+}
+
+/** 当前选中轨落到原生 TextTrack.mode 上：showing = 显示，disabled = 关闭
+ * （disabled 不会拉取 vtt，选了才加载） */
+function applySubtitleMode() {
+  const media = player?.media as HTMLVideoElement | undefined
+  if (!media?.textTracks) return
+  const tracks = props.subtitles || []
+  for (let i = 0; i < media.textTracks.length; i++) {
+    media.textTracks[i].mode =
+      tracks[i] && activeSubtitleKey === String(i) ? 'showing' : 'disabled'
+  }
+}
+
+/** 重建 <track> 列表：换源重建实例后、subtitles 异步到达后、转码窗口变化后都要跑 */
+function attachSubtitleTracks() {
+  const media = player?.media as HTMLVideoElement | undefined
+  if (!media) return
+  for (const tr of Array.from(media.querySelectorAll('track'))) tr.remove()
+  const offset = props.nativeSeek ? 0 : props.startOffset || 0
+  for (const t of props.subtitles || []) {
+    const tr = document.createElement('track')
+    tr.kind = 'subtitles'
+    tr.label = t.label
+    tr.srclang = t.language || ''
+    // 转码窗口的流内时间 = 片源绝对时间 - window_start，<track> 跟随
+    // video.currentTime（流内时间），字幕时间轴必须同样平移才同步
+    tr.src = offset > 0 ? `${t.url}${t.url.includes('?') ? '&' : '?'}offset=${offset.toFixed(3)}` : t.url
+    media.appendChild(tr)
+  }
+  applySubtitleMode()
+}
+
+/** 把最新字幕轨列表 / 选中态同步给控制栏控件 */
+function syncSubtitleState() {
+  const sp = subtitlePlugin()
+  if (!sp?.refresh) return
+  sp.config.tracks = [...(props.subtitles || [])]
+  sp.config.active = activeSubtitleKey
+  sp.refresh()
 }
 
 /** 把最新的画质列表 / 选中态 / 播放模式提示同步给控制栏控件 */
@@ -731,7 +913,10 @@ function spawnPlayer(url: string) {
     // 渐进直连流（/stream）必须裸 <video> —— HlsJsPlugin 的 beforePlayerInit
     // 会无条件 hls.js 接管任何 URL，渐进流被当 HLS 清单解析 → 起播死（转圈）。
     // MSE 不可用（iOS Safari）时 m3u8 也交给 <video> 原生 HLS。
-    plugins: HLS_MSE_OK && HLS_URL_RE.test(url) ? [QualitySelector, HlsJsPlugin] : [QualitySelector],
+    plugins:
+      HLS_MSE_OK && HLS_URL_RE.test(url)
+        ? [QualitySelector, SubtitleSelector, HlsJsPlugin]
+        : [QualitySelector, SubtitleSelector],
   }
 
   try {
@@ -742,10 +927,13 @@ function spawnPlayer(url: string) {
   }
 
   onQualityPick = (q: string) => emit('quality-select', q)
+  onSubtitlePick = (key: string) => pickSubtitle(key)
 
   bindEvents(player)
   installSeekGuard(player)
   syncQualityState()
+  attachSubtitleTracks()
+  syncSubtitleState()
   syncTimeline()
 
   // 待播预览：控制栏常驻（上层遮罩挡住 hover，等不到 autoHide 的唤出）
@@ -808,6 +996,20 @@ watch(
   () => syncTimeline(),
 )
 
+// 字幕轨列表异步到达 / 转码窗口变化（offset 变 → track URL 重建）都要重挂
+watch(
+  () => props.subtitles,
+  () => {
+    attachSubtitleTracks()
+    syncSubtitleState()
+  },
+  { deep: true },
+)
+watch(
+  () => [props.startOffset, props.nativeSeek],
+  () => attachSubtitleTracks(),
+)
+
 watch(
   () => props.pending,
   (pending, wasPending) => {
@@ -826,8 +1028,23 @@ watch(
   },
 )
 
+/** 章节跳转等外部定位入口:统一走 player.seek(xgplayer 公开方法)。
+ * ⚠ seek 已被 seekGuard 包装 —— 直连原地跳;转码窗口外自动 emit seeked
+ * 交父组件重建会话,与拖进度条同一条链路,不会破坏播放状态。 */
+function seekTo(time: number) {
+  if (!player) return
+  try {
+    player.seek(Math.max(0, Number(time) || 0))
+  } catch {
+    /* 忽略:播放器未就绪时静默 */
+  }
+}
+
+defineExpose({ seekTo })
+
 onBeforeUnmount(() => {
   onQualityPick = null
+  onSubtitlePick = null
   stopPendingEvents()
   if (switchingTimer) {
     window.clearTimeout(switchingTimer)
@@ -966,5 +1183,54 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.45);
   cursor: default;
+}
+
+/* ===== 控制栏字幕控件（自定义，与画质控件同款布局）===== */
+.video-player .xgplayer-subtitle {
+  position: relative;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.9);
+}
+.video-player .xgplayer-subtitle .xgplayer-icon {
+  width: 28px;
+  height: 100%;
+  display: block;
+}
+.video-player .xgplayer-subtitle:hover {
+  color: #fff;
+}
+.video-player .xgplayer-subtitle-list {
+  display: none;
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 8px;
+  min-width: 104px;
+  padding: 6px 0;
+  border-radius: 8px;
+  background: rgba(20, 20, 22, 0.96);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+.video-player .xgplayer-subtitle.is-open .xgplayer-subtitle-list {
+  display: block;
+}
+.video-player .xgplayer-subtitle-item {
+  display: block;
+  padding: 6px 14px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.85);
+}
+.video-player .xgplayer-subtitle-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.video-player .xgplayer-subtitle-item.is-active {
+  color: #0485f7;
+}
+.video-player .xgplayer-subtitle-item.is-active::before {
+  content: '✓ ';
 }
 </style>

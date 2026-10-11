@@ -18,6 +18,24 @@ const pageSize = 24
 const loading = ref(false)
 const keyword = ref('')
 const searchInput = ref('')
+// 默认只显示有视频直接关联的组合（被翻唱的原唱不算）；切换状态记住偏好
+const GROUPS_FILTER_KEY = 'groups:filter'
+const onlyWithVideos = ref(localStorage.getItem(GROUPS_FILTER_KEY) !== '0')
+const sortOrder = ref<'default' | 'name' | '-name'>(
+  (localStorage.getItem('groups:sort') as 'default' | 'name' | '-name') || 'default',
+)
+
+function toggleOnlyWithVideos() {
+  onlyWithVideos.value = !onlyWithVideos.value
+  localStorage.setItem(GROUPS_FILTER_KEY, onlyWithVideos.value ? '1' : '0')
+  void load(1)
+}
+
+function onSortChange(e: Event) {
+  sortOrder.value = (e.target as HTMLSelectElement).value as 'default' | 'name' | '-name'
+  localStorage.setItem('groups:sort', sortOrder.value)
+  void load(1)
+}
 
 const avatarPalettes = [
   ['#232a1e', '#15151b'],
@@ -63,6 +81,8 @@ async function load(targetPage: number) {
       q: keyword.value || undefined,
       page: targetPage,
       page_size: pageSize,
+      filter: onlyWithVideos.value ? 'videos' : 'all',
+      sort: sortOrder.value === 'default' ? undefined : sortOrder.value,
     })
     items.value = res.items
     total.value = res.total
@@ -101,12 +121,28 @@ onMounted(() => load(1))
           <h1 class="page-title">组合</h1>
           <span class="page-count">{{ total }}</span>
         </div>
-        <input
-          v-model="searchInput"
-          class="search-input"
-          type="text"
-          placeholder="搜索组合名称…"
-        />
+        <div class="head-actions">
+          <button
+            class="filter-toggle"
+            :class="{ active: onlyWithVideos }"
+            type="button"
+            title="只显示有视频直接关联的组合（被翻唱的原唱不算）"
+            @click="toggleOnlyWithVideos"
+          >
+            {{ onlyWithVideos ? '仅有视频' : '显示全部组合' }}
+          </button>
+          <select class="sort-select" :value="sortOrder" @change="onSortChange">
+            <option value="default">默认排序</option>
+            <option value="name">姓名 A→Z</option>
+            <option value="-name">姓名 Z→A</option>
+          </select>
+          <input
+            v-model="searchInput"
+            class="search-input"
+            type="text"
+            placeholder="搜索组合名称…"
+          />
+        </div>
       </div>
 
       <div v-if="loading && !items.length" class="list-loading">加载中…</div>
@@ -194,6 +230,40 @@ onMounted(() => load(1))
   border: 1px solid var(--sa-border-subtle);
   line-height: 1.6;
 }
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.filter-toggle {
+  padding: 8px 14px;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 9999px;
+  background: var(--sa-elevated);
+  color: var(--sa-text-tertiary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.filter-toggle:hover {
+  border-color: var(--sa-border);
+  color: var(--sa-text-secondary);
+}
+.filter-toggle.active {
+  border-color: var(--sa-accent);
+  color: var(--sa-accent);
+  background: color-mix(in srgb, var(--sa-accent) 10%, transparent);
+}
+.sort-select {
+  padding: 8px 12px;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 8px;
+  background: var(--sa-elevated);
+  color: var(--sa-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .search-input {
   width: 240px;
   padding: 9px 16px;

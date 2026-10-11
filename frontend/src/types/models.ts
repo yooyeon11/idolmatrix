@@ -452,7 +452,26 @@ export interface MusicVideoBrief extends EntityIdentity {
 }
 
 // 完整对象：详情/编辑用（对应后端 MusicVideoRead）
+export interface VideoChapter {
+  /** 片源绝对秒 */
+  time: number
+  title: string
+  /** embedded=容器内嵌 / description=简介时间轴 */
+  source: string
+}
+
+export interface VideoParticipant {
+  /** 库内艺人 id（选择时快照；展示头像用） */
+  id?: number | null
+  /** 选择时的名字快照 */
+  name: string
+  /** 读取时由后端解析补充：艺人仍在库时的跳转 uid */
+  uid?: string | null
+}
+
 export interface MusicVideo extends MusicVideoBrief {
+  /** 视频参与者：仅详情页「相关艺人」展示，不影响其它数据 */
+  participants?: VideoParticipant[]
   name: string
   original_title?: string | null
   chinese_name?: string | null
@@ -610,6 +629,17 @@ export const QUALITY_LABEL: Record<string, string> = {
 }
 
 // ===== Library 扫描 / 入库 =====
+/** is_duplicate 命中的库内副本（分辨率 / 体积对比用） */
+export interface DuplicateCopyInfo {
+  id: number
+  uid?: string | null
+  name?: string | null
+  file_size?: number | null
+  duration?: number | null
+  width?: number | null
+  height?: number | null
+}
+
 export interface ScannedFileItem {
   path: string
   file_name: string
@@ -621,6 +651,35 @@ export interface ScannedFileItem {
   audio_codec?: string | null
   file_hash?: string | null
   is_duplicate: boolean
+  /** is_duplicate=true 时命中的库内副本 */
+  duplicate_of?: DuplicateCopyInfo | null
+  /** 读侧健康检查：missing_json=缺 info.json、missing_cover=缺封面、suspicious_file=疑似残缺文件 */
+  issues?: string[]
+  /** 添加时间（进入待整理列表的时间） */
+  created_at?: string | null
+}
+
+export interface AppExternalApiSettings {
+  /** 外部系统提交评分结果的 Token；空 = 未启用 */
+  token: string
+}
+
+// ===== AI 视频评分（实验功能） =====
+export interface VideoScoreDim {
+  label: string
+  score: number
+  reason: string
+}
+
+export interface VideoScore {
+  id: number
+  music_video_id: number
+  model: string
+  dims: Record<string, VideoScoreDim>
+  comment: string
+  frames: number
+  scored_at: string | null
+  note?: string | null
 }
 
 // ===== 库驱动本地匹配（先建库后入库：专辑来自库内 AlbumTrack 关系）=====
@@ -681,6 +740,7 @@ export interface IngestResult {
   music_video_id: number
   moved: boolean
   destination_path?: string | null
+  moved_subtitles?: string[]
 }
 
 // ===== info.json 精简视图（不含评论/字幕等）=====
@@ -907,6 +967,8 @@ export interface AppIngestAiSettings {
   tagline_prompt?: string
   // 视频中文简介（chinese_description）规则的自定义提示词；为空时后端用内置默认
   desc_prompt?: string
+  // 主标题（name）规范的自定义提示词；为空时后端用内置默认
+  title_prompt?: string
   api_key_set?: boolean
 }
 
@@ -930,6 +992,13 @@ export interface AppTmdbSettings {
   api_key_set?: boolean
 }
 
+/** YouTube Data API v3：博主缺失视频检测的数据源（设置 · 站点获取） */
+export interface AppYoutubeSettings {
+  enabled: boolean
+  api_key: string
+  api_key_set?: boolean
+}
+
 // 「放行跨站写请求」设置项已移除（v3.2.18）：设置页再无开关，AppSettings 也无 network 分区。
 // 部署层后路 = 环境变量 ALLOW_CROSS_ORIGIN_WRITES（后端启动时读取，前端不再感知）。
 
@@ -938,10 +1007,14 @@ export interface AppTmdbSettings {
 // 备注：「内容与匹配」设置栏已下线，后端不再回传 ingest 分区，档位恒为 strict。
 export type IngestMatchMode = 'strict'
 
-/** 单个博主的固定视频类型规则（命中上传人 → 入库直接采用该类型，AI 不判断） */
+/** 单个博主的固定视频类型规则（命中上传人 → 入库直接采用该类型，AI 不判断）+ 缺失检测配置 */
 export interface AppUploaderRule {
   name: string
   video_types: string[]
+  /** YouTube 频道地址 / ID（@handle、/channel/UC… 链接或裸 UC ID） */
+  youtube_channel_url: string
+  /** 是否启用缺失视频检测（针对部分博主 opt-in） */
+  missing_check_enabled: boolean
 }
 
 export interface AppUploaderRulesSettings {
@@ -955,7 +1028,10 @@ export interface AppSettings {
   mtphotos: AppMtPhotosSettings
   external_proxy: AppExternalProxySettings
   tmdb: AppTmdbSettings
+  youtube: AppYoutubeSettings
   uploader_rules?: AppUploaderRulesSettings
+  /** 外部系统集成（实验：AI 评分结果写入） */
+  external_api?: AppExternalApiSettings
 }
 
 // ===== 站点获取（Provider） =====
@@ -1055,7 +1131,7 @@ export interface LibraryStats {
   include_shorts: boolean
   artists: StatsRankItem[]
   groups: StatsRankItem[]
-  /** 镜头焦点：仅按直拍对象（subject_artist_id）聚合 */
+  /** 镜头焦点：仅按主体艺人（subject_artist_id）聚合；字段保留仅为兼容旧数据 */
   subject_artists?: StatsRankItem[]
   songs: StatsRankItem[]
   watch: StatsWatchBlock
@@ -1094,6 +1170,9 @@ export interface StatsRecap {
   clock_peak_hour: number | null
   records: { first: RecapRecord | null; longest: RecapRecord | null; largest: RecapRecord | null }
   monthly: RecapMonth[]
+  /** 观看星期分布(Mon=0 … Sun=6)与最活跃星期 */
+  weekdays?: RecapHour[]
+  peak_weekday?: number | null
 }
 
 // ===== System =====

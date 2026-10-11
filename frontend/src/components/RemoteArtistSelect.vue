@@ -14,8 +14,6 @@ const props = withDefaults(
     disabled?: boolean
     /** 允许快速创建；默认 true */
     allowCreate?: boolean
-    /** Fancam 场景提示文案（不阻断，仅 UI 提示） */
-    fancamHint?: boolean
   }>(),
   {
     modelValue: null,
@@ -23,7 +21,6 @@ const props = withDefaults(
     clearable: true,
     disabled: false,
     allowCreate: true,
-    fancamHint: false,
   },
 )
 
@@ -244,9 +241,6 @@ onMounted(() => {
         </n-button>
       </template>
     </SaSelect>
-    <div v-if="fancamHint && !selectedId" class="hint">
-      当前类型为个人直拍，建议填写直拍对象（成员）
-    </div>
 
     <n-modal
       v-model:show="createModalShow"
@@ -298,11 +292,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.remote-artist-select .hint {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #f0a020;
-}
 .fuzzy-box {
   margin-top: 4px;
   display: flex;

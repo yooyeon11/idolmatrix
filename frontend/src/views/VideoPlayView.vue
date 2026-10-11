@@ -22,8 +22,7 @@ import type { TrackRow } from '@/components/VideoTrackList.vue'
 import { albumsApi } from '@/api/albums'
 import { artistsApi } from '@/api/artists'
 import { groupsApi } from '@/api/groups'
-import { libraryApi } from '@/api/library'
-import { musicVideosApi } from '@/api/musicVideos'
+import { musicVideosApi, type VideoSubtitleTrack } from '@/api/musicVideos'
 import { playbackApi, type CreatePlaybackSessionPayload } from '@/api/playback'
 import { dashboardApi } from '@/api/dashboard'
 import { systemApi } from '@/api/system'
@@ -35,6 +34,8 @@ import type {
   MusicVideoBrief,
   PlaybackSession,
   SongBrief,
+  VideoScore,
+  VideoChapter,
   VideoPathSuggestion,
   VideoType,
 } from '@/types/models'
@@ -47,15 +48,18 @@ import {
   BookmarkOutlined,
   FolderOutlined,
   RefreshOutlined,
+  StarOutlined,
 } from '@/components/icons'
 import VideoCollectPicker from '@/components/VideoCollectPicker.vue'
 import CoverFramePicker from '@/components/CoverFramePicker.vue'
+import FolderPickerModal from '@/components/FolderPickerModal.vue'
 import { videoCollectionsApi } from '@/api/videoCollections'
 import { formatDuration, formatFileSize, formatResolution, formatDate, formatBitrate } from '@/utils/format'
 import { artistPath, fetchByRouteParam, groupPath, songPath, videoPath } from '@/utils/routes'
 import { IMG_W_FULL, IMG_W_THUMB } from '@/utils/imageSizes'
 import { RESOLUTION_TIERS } from '@/utils/resolution'
 import { useSettingsStore } from '@/stores/settings'
+import { readScoringAiConfig } from '@/views/settings/scoringLocal'
 
 const route = useRoute()
 const router = useRouter()
@@ -63,6 +67,8 @@ const message = useMessage()
 const settings = useSettingsStore()
 
 const video = ref<MusicVideo | null>(null)
+// 外挂同名字幕轨（后端统一转 VTT；随视频加载拉取，失败静默）
+const subtitleTracks = ref<VideoSubtitleTrack[]>([])
 const notFound = ref(false)
 const loading = ref(false)
 const playing = ref(false)
@@ -115,6 +121,114 @@ const isCollected = computed(() => savedCollectionIds.value.length > 0)
 
 function applyVideoMembership(_id: number, ids: number[]) {
   savedCollectionIds.value = ids
+}
+
+// ===== AI 视频评分（实验功能） =====
+// ===== 视频章节（实验性） =====
+const playerRef = ref<InstanceType<typeof VideoPlayer> | null>(null)
+const chapters = ref<VideoChapter[]>([])
+
+async function loadChapters() {
+  if (!video.value) {
+    chapters.value = []
+    return
+  }
+  try {
+    chapters.value = (await musicVideosApi.chapters(video.value.id)).items
+  } catch {
+    chapters.value = []
+  }
+}
+
+function jumpToChapter(time: number) {
+  const pr = playerRef.value
+  if (pr && hasEverPlayed.value) {
+    pr.seekTo(time)
+    return
+  }
+  // 未开播:直接从该时间点起播(转码路径会按需重建会话)
+  void startPlayAt(time)
+}
+
+const scoreOpen = ref(false)
+const scoring = ref(false)
+const scoreResult = ref<VideoScore | null>(null)
+const scoreError = ref('')
+const scoreLoadedOnce = ref(false)
+
+async function openScore() {
+  scoreOpen.value = true
+  if (scoreLoadedOnce.value || !video.value) return
+  await loadLatestScore()
+}
+
+// 综合分 = 各维度平均（四舍五入）；无评分时 null
+const scoreOverall = computed<number | null>(() => {
+  const dims = scoreResult.value?.dims
+  if (!dims) return null
+  const values = Object.values(dims).map((d) => Number(d.score) || 0)
+  if (!values.length) return null
+  return Math.round(values.reduce((a, b) => a + b, 0) / values.length)
+})
+
+// 环形进度：满环 = 10 分
+const RING_CIRC = 2 * Math.PI * 15.5
+const ringDash = computed(() => {
+  const overall = scoreOverall.value
+  if (overall === null) return ''
+  return `${(Math.max(0, Math.min(10, overall)) / 10) * RING_CIRC} ${RING_CIRC}`
+})
+
+async function loadLatestScore() {
+  if (!video.value) return
+  try {
+    scoreResult.value = await musicVideosApi.latestAiScore(video.value.id)
+    scoreLoadedOnce.value = true
+  } catch {
+    scoreResult.value = null
+  }
+}
+
+async function runScore() {
+  if (!video.value || scoring.value) return
+  const cfg = readScoringAiConfig()
+  if (!cfg) {
+    scoreError.value = '未启用或未配置完整：请到「设置 · AI 设置 · 视频评分」填写（模型需支持图片输入）'
+    return
+  }
+  scoring.value = true
+  scoreError.value = ''
+  try {
+    scoreResult.value = await musicVideosApi.aiScore(video.value.id, {
+      provider: cfg.provider,
+      base_url: cfg.base_url,
+      api_key: cfg.api_key,
+      model: cfg.model,
+      frames_mode: cfg.frames_mode,
+    })
+    scoreLoadedOnce.value = true
+  } catch (e) {
+    scoreError.value = (e as Error).message
+  } finally {
+    scoring.value = false
+  }
+}
+
+// 换视频:重置评分状态并拉取该视频的最近评分(按钮圆环直接显示)
+watch(
+  () => video.value?.id,
+  (id) => {
+    scoreResult.value = null
+    scoreLoadedOnce.value = false
+    scoreError.value = ''
+    if (id) void loadLatestScore()
+  },
+)
+
+function scoreClass(score: number): string {
+  if (score >= 8) return 'good'
+  if (score <= 4) return 'bad'
+  return 'mid'
 }
 
 async function loadVideoMemberships(videoId: number) {
@@ -550,6 +664,7 @@ async function load(opts: { keepPlayback?: boolean } = {}) {
     transcodePromptShow.value = false
     collectOpen.value = false
     void loadVideoMemberships(mv.id)
+    void loadSubtitles(mv.id)
   } catch (e) {
     if (seq !== loadSeq) return
     video.value = null
@@ -560,14 +675,23 @@ async function load(opts: { keepPlayback?: boolean } = {}) {
   }
   if (seq !== loadSeq) return
   await loadRelated()
+  void loadChapters()
+}
+
+/** 外挂同名字幕轨（后端统一转 VTT）。加载失败静默 —— 字幕是锦上添花，不能挡播放 */
+async function loadSubtitles(videoId: number) {
+  try {
+    subtitleTracks.value = (await musicVideosApi.subtitles(videoId)).items
+  } catch {
+    subtitleTracks.value = []
+  }
 }
 
 async function loadRelated() {
   const v = video.value
   if (!v) return
-  const params: { song_id?: number; subject_artist_id?: number; page_size: number } = { page_size: 6 }
+  const params: { song_id?: number; page_size: number } = { page_size: 6 }
   if (v.song_id) params.song_id = v.song_id
-  else if (v.subject_artist_id) params.subject_artist_id = v.subject_artist_id
   else {
     related.value = []
     return
@@ -1319,7 +1443,6 @@ interface EditFormModel {
   tracks: TrackRow[]
   artist_ids: number[]
   group_ids: number[]
-  subject_artist_id: number | null
   event_name: string
   performance_date: string | null
   release_date: string | null
@@ -1342,7 +1465,6 @@ const editForm = ref<EditFormModel>({
   tracks: [{ key: 'e-init', song_id: null, album_ids: [] }],
   artist_ids: [],
   group_ids: [],
-  subject_artist_id: null,
   event_name: '',
   performance_date: null,
   release_date: null,
@@ -1367,7 +1489,6 @@ const pathSuggestion = ref<VideoPathSuggestion | null>(null)
 const pathSuggestionLoading = ref(false)
 const relocateTarget = ref('')
 const relocating = ref(false)
-const libraryDirs = ref<string[]>([])
 const destDirOpen = ref(false)
 // 移动文件属高危操作：默认折叠，与表单保存/取消在视觉上隔开
 const advancedOpen = ref(false)
@@ -1392,14 +1513,6 @@ async function refreshPathSuggestion() {
 function fillSuggestedPath() {
   if (pathSuggestion.value?.suggested_path) {
     relocateTarget.value = pathSuggestion.value.suggested_path
-  }
-}
-
-async function loadLibraryDirs() {
-  try {
-    libraryDirs.value = await libraryApi.directories()
-  } catch {
-    libraryDirs.value = []
   }
 }
 
@@ -1493,7 +1606,6 @@ function openEdit() {
     })(),
     artist_ids: artistIds,
     group_ids: groupIds,
-    subject_artist_id: v.subject_artist_id ?? null,
     event_name: v.event_name ?? '',
     performance_date: v.performance_date ?? null,
     release_date: v.release_date ?? null,
@@ -1516,7 +1628,6 @@ function openEdit() {
   relocateTarget.value = ''
   pathSuggestion.value = null
   void refreshPathSuggestion()
-  void loadLibraryDirs()
   editShow.value = true
 }
 
@@ -1547,7 +1658,6 @@ async function saveEdit() {
       artist_ids: f.artist_ids.length ? f.artist_ids : null,
       group_ids: f.group_ids.length ? f.group_ids : null,
       song_id: f.tracks.find((t) => t.song_id != null)?.song_id || null,
-      subject_artist_id: f.subject_artist_id || null,
       event_name: strOrNull(f.event_name),
       performance_date: f.performance_date || null,
       release_date: f.release_date || null,
@@ -1696,6 +1806,19 @@ const relatedArtists = computed(() => {
     const name = g.chinese_name || g.name
     list.push({ key: `g-${g.id}`, id: g.id, uid: g.uid, kind: 'group', name, sub: g.group_type || g.name, index: list.length, avatar: g.avatar_path || null })
   }
+  // 视频参与者：仅展示（带头像、不跳转——参与者不进艺人页/统计）
+  for (const p of v.participants || []) {
+    list.push({
+      key: `p-${p.id ?? p.name}`,
+      id: p.id ?? null,
+      uid: '',
+      kind: 'artist',
+      name: p.name,
+      sub: '参与者',
+      index: list.length,
+      avatar: p.id ? `/api/artists/${p.id}/avatar` : null,
+    })
+  }
   return list
 })
 
@@ -1754,6 +1877,7 @@ function goRelated(item: MusicVideoBrief) {
               </div>
               <div v-if="playerVisible" class="hero-player">
                 <VideoPlayer
+                  ref="playerRef"
                   :sources="sources"
                   :poster="poster"
                   :active-label="playing ? activeLabel : ''"
@@ -1768,9 +1892,10 @@ function goRelated(item: MusicVideoBrief) {
                   :start-offset="session?.start_offset || 0"
                   :native-seek="session?.play_mode === 'direct_play'"
                   :auto-play="true"
-                  :seek-into="seekInto"
-                  :available-until="availableUntil"
-                  @state="onPlayerState"
+:seek-into="seekInto"
+:available-until="availableUntil"
+:subtitles="subtitleTracks"
+@state="onPlayerState"
                   @timeupdate="onTimeUpdate"
                   @seeked="onSeeked"
                   @quality-select="selectQuality"
@@ -1870,6 +1995,36 @@ function goRelated(item: MusicVideoBrief) {
                 :video="video"
                 @change="applyVideoMembership"
               />
+              <button
+                v-if="scoreOverall !== null"
+                class="score-ring-btn"
+                :class="scoreClass(scoreOverall)"
+                :disabled="!video"
+                :title="`AI 评分（实验）：综合 ${scoreOverall}/10`"
+                @click="openScore"
+              >
+                <svg viewBox="0 0 36 36" width="24" height="24">
+                  <circle class="ring-track" cx="18" cy="18" r="15.5" />
+                  <circle
+                    class="ring-arc"
+                    cx="18"
+                    cy="18"
+                    r="15.5"
+                    :stroke-dasharray="ringDash"
+                    transform="rotate(-90 18 18)"
+                  />
+                  <text class="ring-text" x="18" y="22">{{ scoreOverall }}</text>
+                </svg>
+              </button>
+              <button
+                v-else
+                class="btn-ghost btn-ghost--icon"
+                :disabled="!video"
+                title="AI 评分（实验）"
+                @click="openScore"
+              >
+                <StarOutlined />
+              </button>
               <button class="btn-ghost btn-ghost--icon" :disabled="!video" title="编辑" @click="openEdit">
                 <EditOutlined />
               </button>
@@ -1998,6 +2153,17 @@ function goRelated(item: MusicVideoBrief) {
                 </div>
               </button>
             </div>
+          </div>
+          <div v-if="chapters.length" class="side-block">
+            <div class="side-title">章节</div>
+            <ol class="chapter-list">
+              <li v-for="(c, i) in chapters" :key="i">
+                <button class="chapter-row" type="button" @click="jumpToChapter(c.time)">
+                  <span class="chapter-time mono">{{ formatDuration(c.time) }}</span>
+                  <span class="chapter-name">{{ c.title }}</span>
+                </button>
+              </li>
+            </ol>
           </div>
         </aside>
       </div>
@@ -2218,28 +2384,51 @@ function goRelated(item: MusicVideoBrief) {
       </template>
     </n-modal>
 
-    <!-- 选择已有入库目录 -->
+    <!-- AI 视频评分（实验） -->
     <n-modal
-      v-model:show="destDirOpen"
+      v-model:show="scoreOpen"
       preset="card"
-      title="选择已有入库目录"
-      :style="{ width: 'min(480px, calc(100vw - 24px))' }"
+      title="AI 视频评分"
+      :style="{ width: 'min(520px, calc(100vw - 24px))' }"
     >
-      <div class="dest-dir-list">
-        <button v-for="d in libraryDirs" :key="d" class="dest-dir-item" type="button" @click="applyDestDir(d)">
-          <FolderOutlined :size="14" />
-          <span>{{ d }}</span>
-        </button>
-        <div v-if="!libraryDirs.length" class="dest-dir-empty">
-          正式库中暂无子目录，可关闭弹窗后手动输入相对路径
-        </div>
+      <div v-if="video" class="score-head">
+        <span class="score-video-name">{{ video.name }}</span>
+        <span v-if="scoreResult" class="score-meta">
+          {{ scoreResult.model }} · {{ scoreResult.frames }} 帧 · {{ (scoreResult.scored_at || '').slice(0, 10) }}
+        </span>
       </div>
+
+      <div v-if="scoreError" class="score-error">{{ scoreError }}</div>
+
+      <div v-if="scoreResult" class="score-dims">
+        <div v-for="(d, key) in scoreResult.dims" :key="key" class="score-dim">
+          <span class="score-dim-name">{{ d.label }}</span>
+          <span class="score-dim-score" :class="scoreClass(d.score)">{{ d.score }}</span>
+          <span class="score-dim-reason">{{ d.reason }}</span>
+        </div>
+        <p v-if="scoreResult.comment" class="score-comment">{{ scoreResult.comment }}</p>
+      </div>
+      <div v-else-if="!scoring" class="score-empty">
+        还没有评分记录。评分会抽取若干帧发送给视觉模型（帧数随抽帧策略，约 30-120 秒）。
+      </div>
+
+      <div v-if="scoring" class="score-loading">
+        <n-spin size="small" />
+        评分中…抽帧与模型推理，视帧数约需 30-120 秒
+      </div>
+
       <template #footer>
         <n-space justify="end">
-          <n-button @click="destDirOpen = false">关闭</n-button>
+          <n-button :disabled="scoring" @click="scoreOpen = false">关闭</n-button>
+          <n-button type="primary" :loading="scoring" @click="runScore">
+            {{ scoreResult ? '重新评分' : '开始评分' }}
+          </n-button>
         </n-space>
       </template>
     </n-modal>
+
+    <!-- 选择目标文件夹（通用软件式：左侧常用位置 + 右侧逐级浏览） -->
+    <FolderPickerModal v-model:show="destDirOpen" @select="applyDestDir" />
   </div>
 </template>
 
@@ -2940,41 +3129,174 @@ function goRelated(item: MusicVideoBrief) {
 .relocate-row .n-input {
   flex: 1;
 }
+.score-ring-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+.score-ring-btn:disabled {
+  opacity: 0.5;
+}
+.score-ring-btn .ring-track {
+  fill: none;
+  stroke: var(--sa-border);
+  stroke-width: 3.2;
+}
+.score-ring-btn .ring-arc {
+  fill: none;
+  stroke: var(--sa-accent);
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.5s ease;
+}
+.score-ring-btn.good .ring-arc {
+  stroke: #34c77b;
+}
+.score-ring-btn.bad .ring-arc {
+  stroke: #f05252;
+}
+.score-ring-btn .ring-text {
+  font-size: 12px;
+  font-weight: 800;
+  fill: var(--sa-text-primary);
+  text-anchor: middle;
+  font-variant-numeric: tabular-nums;
+}
+.score-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.score-video-name {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--sa-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.score-meta {
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
+}
+.score-error {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(240, 82, 82, 0.1);
+  color: #f05252;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.score-dims {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.score-dim {
+  display: grid;
+  grid-template-columns: 76px 34px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  font-size: 13px;
+}
+.score-dim-name {
+  color: var(--sa-text-secondary);
+}
+.score-dim-score {
+  font-size: 18px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--sa-text-primary);
+}
+.score-dim-score.good {
+  color: #34c77b;
+}
+.score-dim-score.mid {
+  color: var(--sa-text-primary);
+}
+.score-dim-score.bad {
+  color: #f05252;
+}
+.score-dim-reason {
+  color: var(--sa-text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.score-comment {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--sa-border-subtle);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--sa-text-secondary);
+}
+.score-empty {
+  padding: 24px 0;
+  font-size: 13px;
+  color: var(--sa-text-tertiary);
+}
+.score-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--sa-text-secondary);
+}
+
+.chapter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chapter-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.chapter-row:hover {
+  background: var(--sa-hover);
+  color: var(--sa-text-primary);
+}
+.chapter-time {
+  color: var(--sa-accent);
+  font-variant-numeric: tabular-nums;
+}
+.chapter-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .relocate-hint {
   margin-top: 8px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--sa-text-tertiary);
-}
-.dest-dir-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 320px;
-  overflow-y: auto;
-}
-.dest-dir-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--sa-subtle);
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 8px;
-  color: var(--sa-text-primary);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-.dest-dir-item:hover {
-  border-color: var(--sa-accent-border);
-  color: var(--sa-accent);
-}
-.dest-dir-empty {
-  padding: 16px;
-  text-align: center;
-  font-size: 13px;
   color: var(--sa-text-tertiary);
 }
 </style>
