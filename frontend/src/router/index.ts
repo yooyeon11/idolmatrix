@@ -37,6 +37,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '短视频' },
       },
       {
+        path: 'shorts/feed',
+        name: 'shorts-feed',
+        component: () => import('@/views/ShortsFeedView.vue'),
+        meta: { title: '随机刷' },
+      },
+      {
         path: 'songs',
         name: 'songs-list',
         component: () => import('@/views/SongsListView.vue'),

@@ -56,6 +56,9 @@ const props = withDefaults(
     maxTagCount?: number | 'responsive'
     /** 挂载 / 聚焦时预取一次（空关键字），让下拉一点开就有候选 */
     prefetch?: boolean
+    /** 下拉菜单按内容自适应宽度（选项文案长、截断会丢关键信息的场景，如排序「新→旧 / 旧→新」）；
+        默认 false = 菜单与收起框同宽（与全站一致） */
+    menuAutoWidth?: boolean
     /** 自定义已选项渲染（如视频类型的纯文本枚举）；不传则用统一的多选样式 */
     renderTag?: (info: SaTagInfo) => VNodeChild
     /** 自定义选项 / 选中值的 label 渲染（如下拉里画色点）。
@@ -73,6 +76,7 @@ const props = withDefaults(
     disabled: false,
     loading: false,
     prefetch: false,
+    menuAutoWidth: false,
   },
 )
 
@@ -148,6 +152,7 @@ onMounted(() => {
     :max-tag-count="maxTagCount"
     :filterable="filterable || isRemote || tag"
     :remote="isRemote"
+    :consistent-menu-width="!menuAutoWidth"
     :render-tag="renderTag"
     :render-label="renderLabel"
     class="sa-select"

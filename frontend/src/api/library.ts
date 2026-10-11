@@ -57,7 +57,6 @@ export const libraryApi = {
     draft_song_names?: string[]
     draft_artist_names?: string[]
     draft_group_names?: string[]
-    draft_subject_artist_name?: string | null
     artist_ids?: number[]
     group_ids?: number[]
     video_types?: string[]
@@ -78,6 +77,20 @@ export const libraryApi = {
   },
   directories() {
     return http.get<string[]>('/library/directories').then((r) => r.data)
+  },
+  /** 删除待整理文件（含同名 json/封面；后端多重防误删校验）。删除即物理删除，不可恢复。 */
+  deleteScanned(path: string) {
+    return http
+      .delete<{ ok: boolean; deleted: string[]; note?: string }>('/library/scan', {
+        data: { path },
+      })
+      .then((r) => r.data)
+  },
+  /** 逐级浏览正式库目录（文件夹选择对话框）：rel 空 = 库根 */
+  browseDirs(rel: string) {
+    return http
+      .get<{ rel: string; dirs: string[] }>('/library/browse-dirs', { params: { rel } })
+      .then((r) => r.data)
   },
   paths() {
     return http.get<SystemPaths>('/library/paths').then((r) => r.data)

@@ -18,7 +18,7 @@ export interface ListParams {
   sort?: string
   page?: number
   page_size?: number
-  filter?: 'all' | 'linked' | 'orphan'
+  filter?: 'all' | 'videos' | 'linked' | 'orphan'
 }
 
 export const groupsApi = {

@@ -198,9 +198,14 @@ function onCellLeave() {
 .hm-cell {
   width: 12px;
   height: 12px;
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--sa-subtle);
   flex: none;
+  transition: box-shadow 0.12s ease;
+}
+/* 悬停格子加一圈强调色描边（tooltip 之外再加一层形变反馈） */
+.hm-cell:hover {
+  box-shadow: 0 0 0 1.5px var(--sa-accent);
 }
 .hm-blank {
   background: transparent;
@@ -225,11 +230,13 @@ function onCellLeave() {
   white-space: nowrap;
   padding: 6px 10px;
   border-radius: 8px;
-  background: var(--sa-text-primary);
-  color: var(--sa-bg);
+  /* 与 ECharts 气泡同一套：深底白字（两主题一致，悬停感受统一） */
+  background: #20242e;
+  color: #f2f4f8;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   font-size: 12px;
   line-height: 1.4;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
 }
 .hm-foot {
   display: flex;
@@ -272,7 +279,7 @@ function onCellLeave() {
   display: inline-block;
   width: 12px;
   height: 12px;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 @media (max-width: 768px) {
   .hm-month {

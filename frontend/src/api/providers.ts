@@ -29,4 +29,7 @@ export const providersApi = {
   tmdbTest(apiKey: string) {
     return http.post<{ ok: boolean }>('/providers/tmdb/test', { api_key: apiKey }).then((r) => r.data)
   },
+  youtubeTest(apiKey: string) {
+    return http.post<{ ok: boolean }>('/providers/youtube/test', { api_key: apiKey }).then((r) => r.data)
+  },
 }

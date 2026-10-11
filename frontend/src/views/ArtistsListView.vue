@@ -33,6 +33,18 @@ function toggleOnlyWithVideos() {
   load(1)
 }
 
+// ===== 按姓名排序(默认 = sort_name 库内口径) =====
+const ARTISTS_SORT_KEY = 'artists:sort'
+const artistSort = ref<'default' | 'name' | '-name'>(
+  (localStorage.getItem(ARTISTS_SORT_KEY) as 'default' | 'name' | '-name') || 'default',
+)
+
+function onSortChange(e: Event) {
+  artistSort.value = (e.target as HTMLSelectElement).value as 'default' | 'name' | '-name'
+  localStorage.setItem(ARTISTS_SORT_KEY, artistSort.value)
+  load(1)
+}
+
 const avatarPalettes = [
   ['#2a2140', '#15151b'],
   ['#22242a', '#15151b'],
@@ -74,6 +86,7 @@ async function load(targetPage: number) {
       page: targetPage,
       page_size: pageSize,
       only_with_videos: onlyWithVideos.value || undefined,
+      sort: artistSort.value === 'default' ? undefined : artistSort.value,
     })
     items.value = res.items
     total.value = res.total
@@ -123,6 +136,15 @@ onMounted(() => load(1))
           >
             {{ onlyWithVideos ? '仅有关联视频' : '显示全部艺人' }}
           </button>
+          <select
+            class="sort-select"
+            :value="artistSort"
+            @change="onSortChange"
+          >
+            <option value="default">默认排序</option>
+            <option value="name">姓名 A→Z</option>
+            <option value="-name">姓名 Z→A</option>
+          </select>
           <input
             v-model="searchInput"
             class="search-input"
@@ -215,6 +237,21 @@ onMounted(() => load(1))
   background: var(--sa-subtle);
   border: 1px solid var(--sa-border-subtle);
   line-height: 1.6;
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sort-select {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 8px;
+  background: var(--sa-elevated);
+  color: var(--sa-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
 }
 .head-actions {
   display: flex;

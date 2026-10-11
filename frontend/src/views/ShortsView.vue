@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import SaHeader from '@/components/SaHeader.vue'
 import SaPagination from '@/components/SaPagination.vue'
@@ -8,8 +9,9 @@ import VideoCard from '@/components/VideoCard.vue'
 import { musicVideosApi } from '@/api/musicVideos'
 import type { MusicVideo } from '@/types/models'
 import { useGridDensity, useGridPageSize } from '@/composables/useGridDensity'
-import { CloseOutlined, MovieOutlined, SearchOutlined, SortOutlined } from '@/components/icons'
+import { CloseOutlined, MovieOutlined, SearchOutlined, ShuffleOutlined, SortOutlined } from '@/components/icons'
 
+const router = useRouter()
 const message = useMessage()
 const loading = ref(false)
 const items = ref<MusicVideo[]>([])
@@ -87,6 +89,11 @@ function onPageChange(p: number) {
   void load(p).then(() => window.scrollTo({ top: 0 }))
 }
 
+// 随机刷（抖音式沉浸 feed）
+function goFeed() {
+  void router.push({ name: 'shorts-feed' })
+}
+
 // page_size 变化（首次测量完成 / 视口跨列数边界 / 切换密度档位）：回到第 1 页重新加载
 watch(pageSize, (v) => {
   if (v > 0) void load(1)
@@ -113,6 +120,10 @@ onBeforeUnmount(() => narrowMq.removeEventListener('change', onNarrowChange))
         <div class="head-tools">
           <!-- display: contents：桌面端不参与布局，移动端整体隐藏 -->
           <span class="head-extra">
+            <button class="shuffle-btn" type="button" title="随机刷短视频（抖音式）" @click="goFeed">
+              <ShuffleOutlined :size="15" />
+              随机刷
+            </button>
             <select v-model="sortOrder" class="sort-select" aria-label="排序">
               <option v-for="o in SORT_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
             </select>
@@ -138,6 +149,15 @@ onBeforeUnmount(() => narrowMq.removeEventListener('change', onNarrowChange))
           </div>
           <!-- 移动端紧凑工具栏：与搜索同一行，全部图标化（无文字），排序走下拉 -->
           <div class="head-icons">
+            <button
+              class="head-icon"
+              type="button"
+              title="随机刷短视频（抖音式）"
+              aria-label="随机刷短视频"
+              @click="goFeed"
+            >
+              <ShuffleOutlined :size="16" />
+            </button>
             <n-dropdown
               :options="sortDropdownOptions"
               trigger="click"
@@ -260,11 +280,11 @@ onBeforeUnmount(() => narrowMq.removeEventListener('change', onNarrowChange))
   background: var(--sa-hover);
 }
 .sort-select {
-  height: 36px;
-  padding: 0 10px;
+  height: 34px;
+  padding: 0 12px;
   border: 1px solid var(--sa-border-subtle);
   border-radius: 8px;
-  background: var(--sa-subtle);
+  background: var(--sa-elevated);
   color: var(--sa-text-secondary);
   font-size: 13px;
   outline: none;
@@ -273,6 +293,25 @@ onBeforeUnmount(() => narrowMq.removeEventListener('change', onNarrowChange))
 }
 .sort-select:focus {
   border-color: var(--sa-accent);
+}
+/* 随机刷入口：站点主色药丸按钮，与搜索框同一行 */
+.shuffle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 9999px;
+  background: var(--sa-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.shuffle-btn:hover {
+  filter: brightness(1.15);
 }
 .head-tools {
   display: flex;

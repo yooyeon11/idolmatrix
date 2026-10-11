@@ -5,6 +5,7 @@ import { useMessage } from 'naive-ui'
 import SaHeader from '@/components/SaHeader.vue'
 import SaPagination from '@/components/SaPagination.vue'
 import SaDensitySwitch from '@/components/SaDensitySwitch.vue'
+import SaSelect from '@/components/SaSelect.vue'
 import { musicVideosApi } from '@/api/musicVideos'
 import { useSettingsStore } from '@/stores/settings'
 import { useGridDensity, useGridPageSize } from '@/composables/useGridDensity'
@@ -19,7 +20,6 @@ import {
   ResolutionOutlined,
   SearchOutlined,
   SortOutlined,
-  VideoLibraryOutlined,
 } from '@/components/icons'
 import { videoPath } from '@/utils/routes'
 import { formatVideoSongs } from '@/utils/format'
@@ -37,7 +37,7 @@ const pageNum = ref(1)
 const loadError = ref('')
 
 const viewMode = ref<'videos' | 'folders'>('videos')
-const activeType = ref('')
+const activeTypes = ref<string[]>([])
 const activeResolution = ref('')
 const sortOrder = ref('created_desc')
 const searchQuery = ref('')
@@ -62,7 +62,7 @@ const folderPageNum = ref(1)
 
 function listFilter() {
   return {
-    video_types: activeType.value || undefined,
+    video_types: activeTypes.value.join(',') || undefined,
     resolution: activeResolution.value || undefined,
     sort: sortOrder.value === 'created_desc' ? undefined : sortOrder.value,
     q: searchQuery.value.trim() || undefined,
@@ -141,14 +141,18 @@ function onFolderPageChange(p: number) {
   void loadFolders(p).then(() => window.scrollTo({ top: 0 }))
 }
 
-// 移动端抽屉内的排序单选列表（与桌面端 sort-select 选项保持一致）
+// 移动端抽屉内的排序单选列表（与桌面端排序下拉选项保持一致）
 const SORT_OPTIONS = [
   { value: 'created_desc', label: '最近上传' },
   { value: 'performance_date_desc', label: '表演日期（新→旧）' },
   { value: 'performance_date_asc', label: '表演日期（旧→新）' },
   { value: 'published_date_desc', label: '上传日期（新→旧）' },
   { value: 'published_date_asc', label: '上传日期（旧→新）' },
+  { value: 'size_desc', label: '体积（大→小）' },
+  { value: 'size_asc', label: '体积（小→大）' },
 ]
+// 桌面端排序下拉（SaSelect 单选，与类型下拉同一框型）
+const sortOptions = SORT_OPTIONS.map((o) => ({ label: o.label, value: o.value }))
 
 // ===== 移动端紧凑工具栏 =====
 // ≤640px：搜索框缩短，类型 / 分辨率 / 排序 / 视图 / 宽松度全部收成图标按钮并排在搜索一栏，
@@ -170,9 +174,6 @@ function toggleViewMode() {
 }
 
 // 图标按钮的 title / aria：图标本身不显示文字，选中值要在提示里说清楚
-const typeIconLabel = computed(() =>
-  activeType.value ? `视频类型：${videoTypeName(activeType.value)}` : '视频类型：全部',
-)
 const resolutionIconLabel = computed(() =>
   activeResolution.value ? `分辨率：${resolutionName(activeResolution.value)}` : '分辨率：全部',
 )
@@ -185,17 +186,8 @@ const viewIconLabel = computed(() =>
 
 // 「全部」哨兵：n-dropdown 的 key 不适合直接用空串（移动端图标菜单里也要能一键还原）
 const RES_ALL_KEY = '__all'
-const TYPE_ALL_KEY = '__all_type'
 
-const typeDropdownOptions = computed(() => [
-  { label: '全部', key: TYPE_ALL_KEY },
-  ...VIDEO_TYPE_OPTIONS.map((o) => ({ label: o.label, key: o.value })),
-])
-
-function onTypeSelect(key: string | number) {
-  const value = String(key)
-  activeType.value = value === TYPE_ALL_KEY ? '' : value
-}
+const typeSelectOptions = VIDEO_TYPE_OPTIONS.map((o) => ({ label: o.label, value: o.value }))
 
 /**
  * 分辨率菜单项：只列当前筛选条件下有条数的档位（口径与统计页一致，空档位不展示）。
@@ -235,7 +227,7 @@ async function loadResolutionFacets() {
   try {
     const res = await musicVideosApi.resolutionFacets({
       q: searchQuery.value.trim() || undefined,
-      video_types: activeType.value || undefined,
+      video_types: activeTypes.value.join(',') || undefined,
       is_short: false,
       ingestion_status: 'library',
     })
@@ -293,7 +285,7 @@ function videoTypeName(t: string) {
 }
 
 // 类型/排序/视图切换：立即回到第 1 页
-watch([activeType, sortOrder, viewMode], () => void load(1))
+watch([activeTypes, sortOrder, viewMode], () => void load(1))
 // 分辨率切换：立即回到第 1 页
 watch(activeResolution, () => void load(1))
 // 搜索：防抖 350ms，与其他列表页一致
@@ -306,7 +298,7 @@ watch(searchQuery, () => {
   }, 350)
 })
 // 类型变化后，可选的分辨率档位与其条数随之变化
-watch(activeType, () => void loadResolutionFacets())
+watch(activeTypes, () => void loadResolutionFacets())
 onMounted(() => {
   isNarrow.value = narrowMq.matches
   narrowMq.addEventListener('change', onNarrowChange)
@@ -358,22 +350,7 @@ watch(pageSize, (v) => {
           </div>
           <!-- 移动端紧凑工具栏：与搜索同一行，全部图标化（无文字），各自下拉选择 -->
           <div class="head-icons">
-            <n-dropdown
-              :options="typeDropdownOptions"
-              trigger="click"
-              placement="bottom-end"
-              @select="onTypeSelect"
-            >
-              <button
-                class="head-icon"
-                :class="{ 'head-icon--on': activeType !== '' }"
-                type="button"
-                :title="typeIconLabel"
-                :aria-label="typeIconLabel"
-              >
-                <VideoLibraryOutlined :size="16" />
-              </button>
-            </n-dropdown>
+
             <n-dropdown
               :options="resolutionDropdownOptions"
               trigger="click"
@@ -450,24 +427,21 @@ watch(pageSize, (v) => {
       <div class="type-chips">
         <button
           class="chip"
-          :class="{ 'chip--active': activeType === '' }"
-          @click="activeType = ''"
+          :class="{ 'chip--active': activeTypes.length === 0 }"
+          @click="activeTypes = []"
         >
           全部
         </button>
-        <n-dropdown
-          :options="typeDropdownOptions"
-          trigger="click"
-          @select="onTypeSelect"
-        >
-          <button
-            class="chip type-chip"
-            :class="{ 'chip--active': activeType !== '' }"
-          >
-            {{ activeType ? videoTypeName(activeType) : '类型' }}
-            <DownOutlined :size="12" />
-          </button>
-        </n-dropdown>
+        <div class="type-select-wrap">
+          <SaSelect
+            v-model="activeTypes"
+            :options="typeSelectOptions"
+            multiple
+            max-tag-count="responsive"
+            clearable
+            placeholder="类型"
+          />
+        </div>
         <n-dropdown
           :options="resolutionDropdownOptions"
           trigger="click"
@@ -481,23 +455,25 @@ watch(pageSize, (v) => {
             <DownOutlined :size="12" />
           </button>
         </n-dropdown>
-        <select v-model="sortOrder" class="sort-select">
-          <option value="created_desc">最近上传</option>
-          <option value="performance_date_desc">表演日期（新→旧）</option>
-          <option value="performance_date_asc">表演日期（旧→新）</option>
-          <option value="published_date_desc">上传日期（新→旧）</option>
-          <option value="published_date_asc">上传日期（旧→新）</option>
-        </select>
+        <div class="sort-select-wrap">
+          <SaSelect
+            v-model="sortOrder"
+            :options="sortOptions"
+            :clearable="false"
+            menu-auto-width
+          />
+        </div>
       </div>
 
       <!-- 移动端激活筛选条：类型/分辨率收进抽屉后，已生效的筛选在此保持可见，点 ✕ 撤销 -->
-      <div v-if="activeType || activeResolution" class="active-filters">
+      <div v-if="activeTypes.length || activeResolution" class="active-filters">
         <button
-          v-if="activeType"
+          v-for="t in activeTypes"
+          :key="t"
           class="chip chip--active filter-chip"
-          @click="activeType = ''"
+          @click="activeTypes = activeTypes.filter((x) => x !== t)"
         >
-          {{ videoTypeName(activeType) }}
+          {{ videoTypeName(t) }}
           <CloseOutlined :size="12" />
         </button>
         <button
@@ -775,8 +751,28 @@ watch(pageSize, (v) => {
 .type-chips {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   padding-bottom: 24px;
+}
+/* 筛选控件统一框型 = 类型下拉（.sa-select）：36px 高 / 12px 圆角 / elevated 底 /
+   1px --sa-border 边框 / 13px 字 / text-primary 字色 —— 同排不再有 8px 小框与原生 select */
+.type-chips .chip {
+  height: 36px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--sa-border);
+  border-radius: 12px;
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+}
+.type-select-wrap {
+  width: 150px;
+}
+.sort-select-wrap {
+  width: 170px;
 }
 .chip {
   padding: 6px 14px;
@@ -792,7 +788,19 @@ watch(pageSize, (v) => {
   color: var(--sa-text-primary);
   border-color: var(--sa-border);
 }
-.chip--active {
+/* 激活态反白（移动端激活筛选条/分辨率 chip 用基础版；浏览筛选行用下面的加权版） */
+.chip--active,
+.chip--active:hover {
+  color: var(--sa-bg);
+  border-color: var(--sa-text-primary);
+  background: var(--sa-text-primary);
+}
+/* 激活态 chip 悬停保持反白配色(hover 规则优先级更高,需显式覆盖回来)。
+   ⚠ 反白配色必须写成 .type-chips .chip--active（0,2,0）才能压过上面的 .type-chips .chip
+   （同为 0,2,0 但写在后面）—— 曾经只写 .chip--active（0,1,0），background 被统一框型
+   的 elevated 盖掉、只剩 color 反白 → 浅色主题白底白字，整颗看起来是空白的白色胶囊。 */
+.type-chips .chip--active,
+.type-chips .chip--active:hover {
   color: var(--sa-bg);
   border-color: var(--sa-text-primary);
   background: var(--sa-text-primary);
@@ -801,22 +809,6 @@ watch(pageSize, (v) => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-.sort-select {
-  margin-left: auto;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 8px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-secondary);
-  font-size: 13px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.2s;
-}
-.sort-select:focus {
-  border-color: var(--sa-accent);
 }
 
 /* 桌面端：head-extra 以 contents 透传给 head-tools 的 flex 布局，激活筛选条不显示 */
@@ -1073,14 +1065,31 @@ watch(pageSize, (v) => {
   .search-clear {
     right: 7px;
   }
-  .type-chips {
-    display: none;
-  }
   .active-filters {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     padding-bottom: 16px;
+  }
+  /* 筛选行：全部/类型/分辨率/排序 一行放下，两个下拉均分剩余宽度 */
+  .type-chips {
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding-bottom: 16px;
+  }
+  .type-chips .chip {
+    padding: 0 10px;
+  }
+  .type-select-wrap,
+  .sort-select-wrap {
+    width: auto;
+    min-width: 0;
+  }
+  .type-select-wrap {
+    flex: 1 1 0;
+  }
+  .sort-select-wrap {
+    flex: 1.2 1 0;
   }
   /* 手机端列数：紧凑 2 列；标准/宽松固定 1 列大卡片（auto-fill 在 500–640px 会变 2 列，显式锁定） */
   .card-grid.density-compact {

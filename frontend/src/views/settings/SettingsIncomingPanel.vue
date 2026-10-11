@@ -26,8 +26,10 @@ import type {
   SongFuzzyHit,
 } from '@/types/models'
 import { formatDuration, formatFileSize, formatResolution, detectPlatform } from '@/utils/format'
+import { videoPath } from '@/utils/routes'
 import SaSelect from '@/components/SaSelect.vue'
 import type { SaOption } from '@/components/SaSelect.vue'
+import DangerConfirmDialog from '@/components/DangerConfirmDialog.vue'
 import VideoTrackList from '@/components/VideoTrackList.vue'
 import type { TrackRow } from '@/components/VideoTrackList.vue'
 import {
@@ -40,6 +42,8 @@ import {
   LoadingOutlined,
   InfoOutlined,
   CloseOutlined,
+  WarningAmberOutlined,
+  DeleteOutlined,
 } from '@/components/icons'
 import { loadAi, outboundAiCreds, readIngestAiConfig } from '@/views/settings/aiLocal'
 
@@ -77,6 +81,150 @@ function toggleIncoming() {
   incomingOpen.value = !incomingOpen.value
   if (incomingOpen.value) void loadIncoming()
 }
+
+// ===== 待整理列表排序（客户端排：列表整单在内存，后端默认按文件路径）=====
+type IncomingSort = 'default' | 'added_desc' | 'added_asc' | 'size_desc' | 'size_asc'
+const incomingSort = ref<IncomingSort>('default')
+const INCOMING_SORT_OPTIONS: { value: IncomingSort; label: string }[] = [
+  { value: 'default', label: '按文件名' },
+  { value: 'added_desc', label: '添加时间从新到旧' },
+  { value: 'added_asc', label: '添加时间从旧到新' },
+  { value: 'size_desc', label: '大小从大到小' },
+  { value: 'size_asc', label: '大小从小到大' },
+]
+
+// ===== 已入库对比：命中库内副本时展示 分辨率 / 体积 对比 =====
+/** 完整分辨率文案：3840×2160（4K）；宽高缺一 → '--'（不猜档位，与 resolutionLabel 同口径） */
+function resolutionFull(w?: number | null, h?: number | null): string {
+  if (!w || !h) return '--'
+  const label = formatResolution(w, h)
+  return label === '--' ? `${w}×${h}` : `${w}×${h}（${label}）`
+}
+function qualityRank(w?: number | null, h?: number | null): number {
+  return (w ?? 0) * (h ?? 0)
+}
+/** 画质对比：1=本视频更高清 / -1=库内更高清 / 0=相同或一侧未探测（按短边归档前先比像素量） */
+function dupQualityCmp(item: ScannedFileItem): number {
+  const dup = item.duplicate_of
+  if (!dup) return 0
+  const a = qualityRank(item.width, item.height)
+  const b = qualityRank(dup.width, dup.height)
+  if (!a || !b || a === b) return 0
+  return a > b ? 1 : -1
+}
+/** 列表行短结论 */
+function dupVerdictShort(item: ScannedFileItem): string {
+  const c = dupQualityCmp(item)
+  if (c > 0) return '本视频更高清'
+  if (c < 0) return '库内更高清'
+  return '同画质'
+}
+/** 详情卡长结论（不带外层括号，避免与档位括号嵌套） */
+function dupVerdictText(item: ScannedFileItem): string {
+  const dup = item.duplicate_of
+  if (!dup) return ''
+  const mine = resolutionFull(item.width, item.height)
+  const theirs = resolutionFull(dup.width, dup.height)
+  const c = dupQualityCmp(item)
+  if (c > 0) return `本视频 ${mine} 比库内副本 ${theirs} 更高清`
+  if (c < 0) return `库内副本 ${theirs} 比本视频 ${mine} 更高清`
+  return '两者分辨率相同（或有一侧未探测到）'
+}
+const incomingSorted = computed(() => {
+  const list = [...incomingList.value]
+  if (incomingSort.value === 'size_desc') {
+    list.sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))
+  } else if (incomingSort.value === 'size_asc') {
+    list.sort((a, b) => (a.file_size ?? 0) - (b.file_size ?? 0))
+  } else if (incomingSort.value === 'added_desc') {
+    list.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+  } else if (incomingSort.value === 'added_asc') {
+    list.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))
+  }
+  return list
+})
+
+// ===== 健康警示：缺 json / 缺封面 / 疑似残缺文件 =====
+// ===== 视频参与者：仅详情页「相关艺人」展示，不影响任何其它数据 =====
+const participantIds = ref<number[]>([])
+const participantNames = ref(new Map<number, string>())
+
+async function searchParticipants(q: string): Promise<SaOption[]> {
+  const list = await artistsApi.brief(q || undefined)
+  for (const a of list) participantNames.value.set(a.id, artistLabel(a))
+  return list.map((a) => ({ label: artistLabel(a), value: a.id }))
+}
+
+const participants = computed(() =>
+  participantIds.value.map((id) => ({
+    id,
+    name: participantNames.value.get(id) ?? `#${id}`,
+  })),
+)
+
+const ISSUE_LABELS: Record<string, string> = {
+  missing_json: '缺 info.json',
+  missing_cover: '缺封面',
+  suspicious_file: '视频可能不完整',
+}
+function issuesOf(item: ScannedFileItem): string[] {
+  return item.issues || []
+}
+function issueTexts(item: ScannedFileItem): string[] {
+  return issuesOf(item).map((k) => ISSUE_LABELS[k] || k)
+}
+
+// ===== 翻唱自（原唱归属）：CoverStage 类型时可选 =====
+// 架构口径：不在视频上建关联，而是落到「待新建」歌曲的发行主体
+// （release_artist_type/id）—— 详情页「翻唱自」与歌曲页归属都由歌曲数据自动推导。
+// 库内已有歌曲的原唱归属在其歌曲数据里维护，选择器对已选歌曲不生效。
+const coverFrom = ref<{ type: 'group' | 'artist'; id: number; name: string } | null>(null)
+const coverFromKind = ref<'artist' | 'group'>('artist')
+const showCoverFrom = computed(() => detailForm.video_types.includes('CoverStage'))
+const lastCoverOptions = ref<SaOption[]>([])
+
+const framelessCoverHint = computed(() =>
+  coverFrom.value && !detailForm.tracks.some((t) => t.draft_song)
+    ? '当前没有「待新建」歌曲：翻唱自仅在入库建歌时生效，已选库内歌曲请到歌曲工作区维护原唱。'
+    : '',
+)
+
+function switchCoverFromKind(kind: 'artist' | 'group') {
+  if (coverFromKind.value === kind) return
+  coverFromKind.value = kind
+  coverFrom.value = null // 艺人/组合的 id 空间不同，切换即清空
+}
+
+async function fetchCoverFromOptions(q: string): Promise<SaOption[]> {
+  const opts =
+    coverFromKind.value === 'group'
+      ? (await groupsApi.brief(q || undefined)).map((g) => ({ label: groupLabel(g), value: g.id }))
+      : (await artistsApi.brief(q || undefined)).map((a) => ({ label: artistLabel(a), value: a.id }))
+  lastCoverOptions.value = opts
+  return opts
+}
+
+const coverFromModel = computed<number | null>({
+  get: () => coverFrom.value?.id ?? null,
+  set: (v) => {
+    if (v == null) {
+      coverFrom.value = null
+      return
+    }
+    const opt = lastCoverOptions.value.find((o) => o.value === v)
+    coverFrom.value = opt
+      ? { type: coverFromKind.value, id: Number(v), name: opt.label }
+      : null
+  },
+})
+
+// 类型里移除翻唱时清空，避免残留值在入库时误写到不相干的新歌上
+watch(
+  () => detailForm.video_types.includes('CoverStage'),
+  (isCover) => {
+    if (!isCover && coverFrom.value) coverFrom.value = null
+  },
+)
 
 async function doScan() {
   scanning.value = true
@@ -184,7 +332,6 @@ interface DetailForm {
   tracks: DraftTrackRow[]
   artist_ids: number[]
   group_ids: number[]
-  subject_artist_id: number | null
   duration?: number | null
   width?: number | null
   height?: number | null
@@ -211,7 +358,6 @@ const detailForm = reactive<DetailForm>({
   tracks: [{ key: 't-init', song_id: null, album_ids: [] }],
   artist_ids: [],
   group_ids: [],
-  subject_artist_id: null,
 })
 
 const libraryRoot = ref('')
@@ -271,16 +417,16 @@ async function openDetail(item: ScannedFileItem) {
     tracks: [{ key: `t-${Date.now()}`, song_id: null, album_ids: [] }],
     artist_ids: [],
     group_ids: [],
-    subject_artist_id: null,
   })
   destPreview.value = { relative: '', absolute: '', notice: null }
   destRelTouched.value = false
   titleTouched.value = false
   uploaderRuleTypes.value = []
   uploaderRuleName.value = ''
+  coverFrom.value = null
+  participantIds.value = []
   draftArtistNames.value = []
   draftGroupNames.value = []
-  draftSubjectArtistName.value = null
   songPresets.value = []
   manualAlbumPresets.value = []
   songAlbumPresets.value = []
@@ -421,11 +567,10 @@ async function refreshDestPreview(force = false) {
       draft_song_names: detailForm.tracks
         .map((t) => t.draft_song)
         .filter((n): n is string => !!n),
-      // 「待新建」草稿艺人/组合/直拍对象同口径参与归档规则
+      // 「待新建」草稿艺人/组合同口径参与归档规则
       // （入库时会先创建实体再算路径，预览不一致会错误平铺根目录）
       draft_artist_names: [...draftArtistNames.value],
       draft_group_names: [...draftGroupNames.value],
-      draft_subject_artist_name: draftSubjectArtistName.value || null,
       artist_ids: detailForm.artist_ids,
       group_ids: detailForm.group_ids,
       video_types: detailForm.video_types,
@@ -457,7 +602,6 @@ async function refreshTitle(force = false) {
       song_ids: detailForm.tracks.map((t) => t.song_id).filter((id): id is number => id != null),
       artist_ids: detailForm.artist_ids,
       group_ids: detailForm.group_ids,
-      subject_artist_id: detailForm.subject_artist_id,
       event_name: detailForm.event_name || null,
       video_types: detailForm.video_types,
     })
@@ -497,11 +641,10 @@ async function loadDestDirs() {
 // AI 分析只填草稿，点「入库」时才真正创建，避免错误数据直接进库
 const draftArtistNames = ref<string[]>([])
 const draftGroupNames = ref<string[]>([])
-const draftSubjectArtistName = ref<string | null>(null)
 
 // 标题 / 视频类型 / 短视频标记 / solo 标记 / 非表演标记 / 表演日期 / 关联（歌曲/艺术家/组合）变化时，若用户尚未手动修改入库路径，自动刷新建议路径
 watch(
-  () => [detailForm.name, detailForm.video_types, detailForm.is_solo, detailForm.performance_date, detailForm.tracks, detailForm.artist_ids, detailForm.group_ids, draftArtistNames, draftGroupNames, draftSubjectArtistName],
+  () => [detailForm.name, detailForm.video_types, detailForm.is_solo, detailForm.performance_date, detailForm.tracks, detailForm.artist_ids, detailForm.group_ids, draftArtistNames, draftGroupNames],
   () => {
     if (aiFilling.value) return
     if (activeItem.value && !destRelTouched.value) {
@@ -511,9 +654,9 @@ watch(
   { deep: true },
 )
 
-// 表演日期 / 上传日期 / 曲目 / 艺人 / 组合 / 类型 / 活动 / 直拍对象变化时，若用户尚未手动编辑标题，自动按 AI 标题规范重建
+// 表演日期 / 上传日期 / 曲目 / 艺人 / 组合 / 类型 / 活动变化时，若用户尚未手动编辑标题，自动按 AI 标题规范重建
 watch(
-  () => [detailForm.performance_date, detailForm.published_date, detailForm.tracks, detailForm.artist_ids, detailForm.group_ids, detailForm.video_types, detailForm.event_name, detailForm.subject_artist_id],
+  () => [detailForm.performance_date, detailForm.published_date, detailForm.tracks, detailForm.artist_ids, detailForm.group_ids, detailForm.video_types, detailForm.event_name],
   () => {
     if (aiFilling.value) return
     if (activeItem.value && !titleTouched.value) {
@@ -529,6 +672,28 @@ function closeDetail() {
   // 离开详情即清掉 AI 加载态：残留的 AI 请求由 aiIngest 内的 item 守卫丢弃
   aiLoading.value = false
   aiFilling.value = false
+}
+
+// ===== 删除待整理文件（详情页头部入口，确认弹窗 HeroUI 风格）=====
+const deleteConfirmShow = ref(false)
+const deleting = ref(false)
+
+async function doDeleteScanned() {
+  const item = activeItem.value
+  if (!item || deleting.value) return
+  deleting.value = true
+  try {
+    await libraryApi.deleteScanned(item.path)
+    deleteConfirmShow.value = false
+    message.success(`已删除「${item.file_name}」`)
+    // 回列表（被删的条目已不存在）
+    closeDetail()
+    await loadIncoming()
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    deleting.value = false
+  }
 }
 
 // ===== 关联搜索（歌曲 / 专辑 / 艺术家 / 组合） =====
@@ -1161,7 +1326,11 @@ const previewRows = computed(() => {
   }
 
   push('视频类型', detailForm.video_types.map((v) => VIDEO_TYPE_LABEL[v] || v).join(' / '))
+  if (showCoverFrom.value && coverFrom.value) {
+    push('翻唱自', `${coverFrom.value.name}（${coverFrom.value.type === 'group' ? '组合' : '艺人'}）`)
+  }
   push('Solo（独立艺人）', detailForm.is_solo ? '是' : '否')
+  push('视频参与者', participants.value.map((p) => p.name).join('、'))
   push('标题', detailForm.name)
   push('视频平台', detailForm.source_platform)
   push('上传日期', detailForm.published_date)
@@ -1491,9 +1660,6 @@ async function aiIngest() {
       suggestion.suggested_songs,
       suggestion.suggested_albums,
     )
-    if (typeof suggestion.subject_artist_name === 'string' && suggestion.subject_artist_name.trim()) {
-      await applySubjectArtist(suggestion.subject_artist_name.trim())
-    }
     if (suggestion.notice) {
       message.warning(suggestion.notice)
     }
@@ -1589,27 +1755,6 @@ async function aiSearchAlbum() {
     message.error((e as Error).message)
   } finally {
     albumAiLoading.value = false
-  }
-}
-
-async function applySubjectArtist(name: string) {
-  const ids: number[] = []
-  const r = await linkOrCreateAiRel<ArtistBrief>(
-    name,
-    (q) => artistsApi.brief(q),
-    artistLabel,
-    ids,
-    artistPresets.value,
-    (n) => askArtistFuzzy(n),
-  )
-  if (ids[0]) {
-    detailForm.subject_artist_id = ids[0]
-    draftSubjectArtistName.value = null
-  }
-  if (r === 'linked') message.success(`已关联直拍对象：${name}`)
-  else if (r === 'draft') {
-    draftSubjectArtistName.value = name
-    message.info(`直拍对象「${name}」标注为待新建，入库时才会创建`)
   }
 }
 
@@ -1794,7 +1939,7 @@ async function createOrFuzzyLink(
 }
 
 /**
- * 把「待新建」草稿真正创建并关联：艺人 → 组合 → 直拍对象 → 歌曲（曲目行）→ 专辑。
+ * 把「待新建」草稿真正创建并关联：艺人 → 组合 → 歌曲（曲目行）→ 专辑。
  * 任一项创建失败则中止入库（已成功创建的会保留，重试不会重复创建）。
  */
 async function materializeDrafts(): Promise<boolean> {
@@ -1830,26 +1975,18 @@ async function materializeDrafts(): Promise<boolean> {
     draftGroupNames.value.splice(i, 1)
   }
 
-  // 直拍对象草稿
-  if (draftSubjectArtistName.value) {
-    const name = draftSubjectArtistName.value
-    const id = await createOrFuzzyLink(
-      () => artistsApi.create({ name }),
-      () => artistsApi.fuzzy(name),
-    )
-    if (id == null) failures.push(`直拍对象「${name}」`)
-    else {
-      detailForm.subject_artist_id = id
-      draftSubjectArtistName.value = null
-    }
-  }
-
   // 曲目行：先歌曲后专辑（专辑挂在歌曲所在行）
   for (const row of detailForm.tracks) {
     if (row.draft_song) {
       const name = row.draft_song
+      const payload: Partial<Song> = { name }
+      // 翻唱：把「翻唱自」写进新歌的发行主体（详情页「翻唱自」由此推导）
+      if (showCoverFrom.value && coverFrom.value) {
+        payload.release_artist_type = coverFrom.value.type
+        payload.release_artist_id = coverFrom.value.id
+      }
       const id = await createOrFuzzyLink(
-        () => songsApi.create({ name }),
+        () => songsApi.create(payload),
         () => songsApi.fuzzy(name),
       )
       if (id == null) {
@@ -1958,11 +2095,15 @@ async function confirmIngest() {
         published_date: published_date.trim() || null,
         song_ids: cleanTracks.map((t) => t.song_id),
         tracks: cleanTracks,
+        participants: participants.value,
       } as { name: string; video_type: string },
       move_file: true,
       destination_rel: detailForm.destination_rel.trim() || null,
     })
-    message.success(`入库成功（#${result.music_video_id}）`)
+    const subNote = result.moved_subtitles?.length
+      ? `，含 ${result.moved_subtitles.length} 个字幕文件`
+      : ''
+    message.success(`入库成功（#${result.music_video_id}${subNote}）`)
     incomingList.value = incomingList.value.filter(
       (it) => it.path !== activeItem.value!.path,
     )
@@ -2340,14 +2481,21 @@ onMounted(() => {
                   <div v-if="incomingOpen" class="incoming-list">
                     <div class="incoming-list-head">
                       <span>待整理视频</span>
-                      <button
-                        class="incoming-refresh"
-                        :disabled="incomingLoading"
-                        aria-label="刷新列表"
-                        @click="loadIncoming"
-                      >
-                        <RefreshOutlined :size="13" />
-                      </button>
+                      <span class="incoming-head-tools">
+                        <select v-model="incomingSort" class="incoming-sort" aria-label="列表排序">
+                          <option v-for="o in INCOMING_SORT_OPTIONS" :key="o.value" :value="o.value">
+                            {{ o.label }}
+                          </option>
+                        </select>
+                        <button
+                          class="incoming-refresh"
+                          :disabled="incomingLoading"
+                          aria-label="刷新列表"
+                          @click="loadIncoming"
+                        >
+                          <RefreshOutlined :size="13" />
+                        </button>
+                      </span>
                     </div>
                     <div v-if="incomingLoading" class="incoming-empty">正在扫描…</div>
                     <div v-else-if="!incomingList.length" class="incoming-empty">
@@ -2355,7 +2503,7 @@ onMounted(() => {
                     </div>
                     <ul v-else class="incoming-items">
                       <li
-                        v-for="item in incomingList"
+                        v-for="item in incomingSorted"
                         :key="item.path"
                         class="incoming-item incoming-item--clickable"
                         @click="openDetail(item)"
@@ -2364,6 +2512,16 @@ onMounted(() => {
                           <span class="incoming-name" :title="item.file_name">{{ item.file_name }}</span>
                           <span class="incoming-meta">
                             {{ formatResolution(item.width, item.height) }} · {{ formatDuration(item.duration) }} · {{ formatFileSize(item.file_size) }}
+                          </span>
+                          <!-- 健康警示：缺 json / 缺封面 / 疑似残缺 -->
+                          <span v-if="issueTexts(item).length" class="incoming-warn">
+                            <WarningAmberOutlined :size="12" />
+                            {{ issueTexts(item).join(' · ') }}
+                          </span>
+                          <!-- 已入库对比：命中库内副本的分辨率 / 体积 -->
+                          <span v-if="item.is_duplicate && item.duplicate_of" class="incoming-dup">
+                            库内副本 {{ resolutionFull(item.duplicate_of.width, item.duplicate_of.height) }} · {{ formatFileSize(item.duplicate_of.file_size) }}
+                            <em>· {{ dupVerdictShort(item) }}</em>
                           </span>
                         </div>
                         <span
@@ -2392,6 +2550,40 @@ onMounted(() => {
                     返回列表
                   </button>
                   <span class="detail-file" :title="activeItem.file_name">{{ activeItem.file_name }}</span>
+                  <!-- 删除：放详情页头部最右，与底部入库按钮远隔，防误点 -->
+                  <button
+                    class="detail-delete"
+                    type="button"
+                    :disabled="deleting"
+                    title="删除该文件（含 json/封面，不可恢复）"
+                    @click="deleteConfirmShow = true"
+                  >
+                    <DeleteOutlined :size="14" />
+                    删除
+                  </button>
+                </div>
+
+                <!-- 已入库对比卡：本视频 vs 库内副本的分辨率 / 体积，帮助决定留哪份 -->
+                <div v-if="activeItem.is_duplicate && activeItem.duplicate_of" class="dup-compare">
+                  <div class="dup-compare-head">
+                    <span class="dup-compare-title">库内已有该视频</span>
+                    <a
+                      v-if="activeItem.duplicate_of.uid"
+                      class="dup-compare-link"
+                      :href="videoPath(activeItem.duplicate_of.uid)"
+                      target="_blank"
+                      rel="noopener"
+                    >查看库内副本</a>
+                  </div>
+                  <div class="dup-compare-row">
+                    <span class="dup-k">本视频</span>
+                    <span class="dup-v">{{ resolutionFull(activeItem.width, activeItem.height) }} · {{ formatFileSize(activeItem.file_size) }}</span>
+                  </div>
+                  <div class="dup-compare-row">
+                    <span class="dup-k">库内副本</span>
+                    <span class="dup-v">{{ resolutionFull(activeItem.duplicate_of.width, activeItem.duplicate_of.height) }} · {{ formatFileSize(activeItem.duplicate_of.file_size) }}</span>
+                  </div>
+                  <div class="dup-compare-verdict">{{ dupVerdictText(activeItem) }}</div>
                 </div>
 
                 <div class="detail-layout">
@@ -2509,6 +2701,36 @@ onMounted(() => {
                           <label for="is-solo-check">Solo（独立艺人）</label>
                         </div>
                       </div>
+                      <div v-if="showCoverFrom" class="form-field">
+                        <div class="field-row">
+                          <span class="form-label">翻唱自（原唱）</span>
+                          <span class="coverfrom-kind">
+                            <button
+                              type="button"
+                              :class="{ on: coverFromKind === 'artist' }"
+                              @click="switchCoverFromKind('artist')"
+                            >
+                              艺人
+                            </button>
+                            <button
+                              type="button"
+                              :class="{ on: coverFromKind === 'group' }"
+                              @click="switchCoverFromKind('group')"
+                            >
+                              组合
+                            </button>
+                          </span>
+                        </div>
+                        <SaSelect
+                          v-model="coverFromModel"
+                          :fetch-options="fetchCoverFromOptions"
+                          placeholder="搜索原唱艺人 / 组合"
+                        />
+                        <div class="field-hint">
+                          作用于「待新建」歌曲：入库建歌时写入原唱归属，详情页会显示「翻唱自」。
+                          {{ framelessCoverHint }}
+                        </div>
+                      </div>
                       <div class="form-field">
                         <span class="form-label">标题</span>
                         <input v-model="detailForm.name" class="sa-input" type="text" placeholder="库内展示标题" @input="titleTouched = true" />
@@ -2618,6 +2840,18 @@ onMounted(() => {
                           以上为 AI 建议的新艺人，点「入库」时才会创建；建错了直接点 × 删除
                         </div>
                       </div>
+                      <div class="form-field">
+                        <span class="form-label">视频参与者</span>
+                        <SaSelect
+                          v-model="participantIds"
+                          :fetch-options="searchParticipants"
+                          multiple
+                          placeholder="输入艺人名搜索（仅详情页展示）"
+                        />
+                        <div class="field-hint">
+                          仅显示在本视频详情页「相关艺人」中，不影响归档路径、统计与艺人页。
+                        </div>
+                      </div>
                       <div class="form-field hit-accent">
                         <span class="form-label">组合</span>
                         <SaSelect
@@ -2720,6 +2954,18 @@ onMounted(() => {
                     </div>
                   </div>
                 </div>
+
+                <!-- 删除确认（HeroUI 风危险对话框） -->
+                <DangerConfirmDialog
+                  :show="deleteConfirmShow"
+                  title="删除该待整理文件？"
+                  :detail="`将永久删除磁盘上的「${activeItem?.file_name || ''}」，以及它附带的 info.json、同名封面与字幕文件。\n删除不可恢复，且不会进入回收站。`"
+                  confirm-text="永久删除"
+                  :loading="deleting"
+                  @update:show="(v: boolean) => (deleteConfirmShow = v)"
+                  @cancel="deleteConfirmShow = false"
+                  @confirm="doDeleteScanned"
+                />
 
                 <!-- 选择已有入库目录 -->
                 <n-modal

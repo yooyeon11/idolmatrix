@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref, watch, type Component } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { NButton, useDialog, useMessage, type SelectOption } from 'naive-ui'
 import { authApi, type AuthUser } from '@/api/auth'
 import { libraryApi } from '@/api/library'
@@ -55,6 +55,7 @@ import SettingsUploadersPanel from '@/views/settings/SettingsUploadersPanel.vue'
 
 
 const router = useRouter()
+const route = useRoute()
 const message = useMessage()
 const dialog = useDialog()
 const app = useAppStore()
@@ -373,6 +374,49 @@ async function resetTmdb() {
   }
 }
 
+// ===== YouTube 缺失检测（博主频道缺失视频的数据源）=====
+const youtubePingLoading = ref(false)
+const youtubePingHint = ref('')
+
+async function pingYoutube() {
+  youtubePingLoading.value = true
+  youtubePingHint.value = ''
+  try {
+    await providersApi.youtubeTest(settings.youtube.api_key)
+    youtubePingHint.value = '连接成功，API Key 有效'
+    message.success(youtubePingHint.value)
+  } catch (e) {
+    youtubePingHint.value = (e as Error).message
+    message.error(youtubePingHint.value)
+  } finally {
+    youtubePingLoading.value = false
+  }
+}
+
+async function saveYoutube() {
+  const hasKey = !!(settings.youtube.api_key || '').trim() || !!settings.youtube.api_key_set
+  if (settings.youtube.enabled && !hasKey) {
+    message.error('启用 YouTube 缺失检测前请先填写 API Key')
+    return
+  }
+  try {
+    await settings.saveYoutube()
+    message.success('YouTube 设置已保存（各设备共用）')
+  } catch (e) {
+    message.error((e as Error).message)
+  }
+}
+
+async function resetYoutube() {
+  try {
+    await settings.resetYoutube()
+    youtubePingHint.value = ''
+    message.success('已恢复默认')
+  } catch (e) {
+    message.error((e as Error).message)
+  }
+}
+
 // ===== 侧边栏分区 =====
 const sections = [
   { key: 'base', icon: SettingsOutlined, label: '基础设置' },
@@ -633,6 +677,14 @@ onMounted(() => {
   // 进设置页时拉一次后端设置：多客户端之间改了配置后，另一端只要点开设置就能看到最新值
   // （启动时那次 hydrate 可能早于另一端的改动；只在此处补一次，不做轮询）
   void settings.hydrate()
+  // 深链：?section=db&db=uploaders（博主页「去配置」按钮等直接落到具体面板）
+  const qSection = String(route.query.section || '')
+  const qDb = String(route.query.db || '')
+  if (qSection && sections.some((s) => s.key === qSection)) activeSection.value = qSection
+  if (qDb && dbEntries.some((e) => e.key === qDb)) {
+    activeSection.value = 'db'
+    dbView.value = qDb as DbView
+  }
 })
 </script>
 <template>
@@ -900,6 +952,58 @@ onMounted(() => {
                       <n-button size="small" type="primary" @click="saveTmdb">保存</n-button>
                     </div>
                     <div v-if="tmdbPingHint" class="field-hint">{{ tmdbPingHint }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-subtitle">YouTube 缺失检测</div>
+                <div class="panel-grid">
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">启用</span>
+                      <label class="sa-switch">
+                        <input v-model="settings.youtube.enabled" type="checkbox" />
+                        <span class="track"><span class="thumb" /></span>
+                      </label>
+                    </div>
+                    <div class="field-hint">
+                      YouTube Data API v3 密钥，用于拉取博主频道完整投稿列表。申请：
+                      Google Cloud Console → 启用 YouTube Data API v3 → 创建 API Key（默认每日 1 万 quota）。
+                      填好后还需到「资料库 · 博主管理」给博主填频道地址并勾选「缺失检测」，博主页才会出现缺失区块；
+                      出网走上方「网络与代理」。
+                    </div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">API Key</span>
+                    </div>
+                    <input
+                      v-model="settings.youtube.api_key"
+                      class="sa-input"
+                      type="password"
+                      :placeholder="settings.youtube.api_key_set ? '已保存，留空则不修改' : 'Google Cloud Console 申请（YouTube Data API v3）'"
+                      autocomplete="off"
+                    />
+                    <div class="field-hint">免费申请，默认每日 1 万 quota，够检测数千次</div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="hero-text-actions">
+                      <n-button size="small" quaternary :loading="youtubePingLoading" @click="pingYoutube">
+                        测试连接
+                      </n-button>
+                      <button
+                        class="sa-btn sa-btn--icon"
+                        type="button"
+                        title="恢复默认"
+                        aria-label="恢复默认"
+                        @click="resetYoutube"
+                      >
+                        <RefreshOutlined :size="15" />
+                      </button>
+                      <n-button size="small" type="primary" @click="saveYoutube">保存</n-button>
+                    </div>
+                    <div v-if="youtubePingHint" class="field-hint">{{ youtubePingHint }}</div>
                   </div>
                 </div>
               </div>

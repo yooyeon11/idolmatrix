@@ -117,7 +117,13 @@ onMounted(() => load(1))
             </div>
             <div class="uploader-name" :title="u.name">{{ u.name }}</div>
             <div class="uploader-meta">
-              <span class="uploader-count">{{ u.video_count }} 个视频</span>
+              <span class="uploader-count">
+                <template v-if="u.channel_video_total != null">
+                  {{ u.video_count }}/{{ u.channel_video_total }} 个视频
+                </template>
+                <template v-else>{{ u.video_count }} 个视频</template>
+              </span>
+              <span v-if="u.missing_count" class="uploader-missing">缺 {{ u.missing_count }}</span>
               <span v-if="u.platform" class="uploader-platform">{{ u.platform }}</span>
             </div>
           </div>
@@ -274,6 +280,16 @@ onMounted(() => load(1))
 }
 .uploader-count {
   color: var(--sa-text-secondary);
+}
+/* 缺失检测徽标：频道全集与库内数量差（未启用检测的博主不显示） */
+.uploader-missing {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--sa-accent);
+  color: var(--sa-accent);
+  font-size: 11px;
+  line-height: 1.6;
 }
 .uploader-platform {
   color: var(--sa-accent);
