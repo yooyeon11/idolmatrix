@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.guards import ensure_name_ci_unique, require_active, validate_release_artist
+from app.core.audit import mark_before, mark_changes
 from app.core.deps import DbDep, PaginationDep
 from app.models.artist import Artist
 from app.models.company import Company, GroupCompanyRelation
@@ -27,7 +28,7 @@ from app.schemas import (
     PageResponse,
 )
 from app.services import audiodb_service, entity_image_service, external_providers, img_variant, portrait_service
-from app.services.derived_http import serve_derived_image
+from app.services.derived_http import serve_derived_image, versioned_cache_control
 from app.services.completion import group_completion_pct
 from app.services.soft_delete_service import soft_delete_group
 from app.services.name_match import fuzzy_groups, related_artist_ids_for_groups
@@ -246,7 +247,7 @@ def get_group(group_id: int, db: DbDep):
 
 
 @router.patch("/{group_id}", response_model=GroupRead)
-def update_group(group_id: int, payload: GroupUpdate, db: DbDep):
+def update_group(group_id: int, payload: GroupUpdate, request: Request, db: DbDep):
     group = Group.get_active(db, group_id)
     if not group:
         raise HTTPException(404, "Group 不存在")
@@ -256,12 +257,17 @@ def update_group(group_id: int, payload: GroupUpdate, db: DbDep):
     if "parent_group_id" in data:
         _validate_parent(db, group.id, data["parent_group_id"])
     company_ids = data.pop("company_ids", None)
+    before = mark_before(group, data.keys())
     for k, v in data.items():
         setattr(group, k, v)
     if company_ids is not None:
         _sync_group_companies(db, group, company_ids)
     db.commit()
     db.refresh(group)
+    changes = dict(data)
+    if company_ids is not None:
+        changes["company_ids"] = list(company_ids)
+    mark_changes(request, before, changes)
     return group
 
 
@@ -317,8 +323,12 @@ def get_group_avatar(group_id: int, db: DbDep, request: Request, w: Optional[int
     if w:
         p2 = img_variant.resized_variant(p, w)
         if p2 is not None:
-            return serve_derived_image(request, p2, "image/jpeg")
-    return serve_derived_image(request, p, audiodb_service.media_type_of(p))
+            return serve_derived_image(
+                request, p2, "image/jpeg", cache_control=versioned_cache_control(request)
+            )
+    return serve_derived_image(
+        request, p, audiodb_service.media_type_of(p), cache_control=versioned_cache_control(request)
+    )
 
 
 @router.get("/{group_id}/banner")
@@ -333,8 +343,12 @@ def get_group_banner(group_id: int, db: DbDep, request: Request, w: Optional[int
     if w:
         p2 = img_variant.resized_variant(p, w)
         if p2 is not None:
-            return serve_derived_image(request, p2, "image/jpeg")
-    return serve_derived_image(request, p, audiodb_service.media_type_of(p))
+            return serve_derived_image(
+                request, p2, "image/jpeg", cache_control=versioned_cache_control(request)
+            )
+    return serve_derived_image(
+        request, p, audiodb_service.media_type_of(p), cache_control=versioned_cache_control(request)
+    )
 
 
 @router.delete("/{group_id}/banner")

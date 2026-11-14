@@ -23,8 +23,10 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__ as APP_VERSION
 from app.api.router import api_router
 from app.core.auth_gate import AuthGateMiddleware
+from app.core.audit import AuditMiddleware
 from app.core.config import PROJECT_ROOT, settings
 from app.core.http_limits import BodyLimitMiddleware, SecurityHeadersMiddleware
+from app.core.mirror_guard import MirrorReadOnlyMiddleware
 from app.core.database import SessionLocal, init_db
 from app.core.ffmpeg import check_available
 from app.media.ffmpeg_engine import FfmpegEngineError
@@ -33,6 +35,7 @@ from app.services.library_service import cleanup_missing_videos
 from app.services.playback_manager import PlaybackError
 from app.services.transcode_manager import transcode_manager
 from app.tasks.scan_task import incoming_scan_loop
+from app.services import download_service, subscription_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,6 +88,10 @@ def _setup_frontend(app: FastAPI) -> bool:
 
 def _cleanup_missing_library() -> None:
     """启动时只扫描疑似失效记录，不写库、不删文件。清理必须在设置里确认。"""
+    if settings.mirror_mode:
+        # 只读镜像没有媒体文件，这里扫下去会把整个库判成「文件全部丢失」
+        logger.info("只读镜像模式：跳过失效视频扫描")
+        return
     try:
         db = SessionLocal()
         try:
@@ -145,13 +152,17 @@ def _periodic_cleanup_loop(interval: float, stop: "threading.Event") -> None:
                 from app.services.auth_service import cleanup_sessions
 
                 sessions = cleanup_sessions(db)
+                from app.core.audit import prune as prune_audit
+
+                audit_pruned = prune_audit(db, keep_days=180)
                 logger.info(
-                    "周期清理完成：transcode_stopped=%s playback_closed=%s dirs_removed=%s swept=%s sessions=%s",
+                    "周期清理完成：transcode_stopped=%s playback_closed=%s dirs_removed=%s swept=%s sessions=%s audit_pruned=%s",
                     cleaned.get("transcode_stopped"),
                     cleaned.get("playback_closed"),
                     cleaned.get("dirs_removed"),
                     swept,
                     sessions,
+                    audit_pruned,
                 )
             finally:
                 db.close()
@@ -207,6 +218,10 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _start_incoming_scan():
+        if settings.mirror_mode:
+            # 在线版没有 incoming 目录，扫描线程只会空转并刷错误日志
+            logger.info("只读镜像模式：不启动 incoming 扫描线程")
+            return
         app.state._scan_stop = threading.Event()
         app.state._scan_thread = threading.Thread(
             target=incoming_scan_loop,
@@ -222,8 +237,39 @@ def create_app() -> FastAPI:
         if stop_event is not None:
             stop_event.set()
 
-    # 后加的中间件先处理请求：体积分 → CORS → 安全头 → 登录门禁
+    @app.on_event("startup")
+    async def _start_download_worker():
+        # YouTube 下载队列（单 worker 串行）
+        download_service.worker.start()
+
+    @app.on_event("shutdown")
+    async def _stop_download_worker():
+        download_service.worker.stop()
+
+    @app.on_event("startup")
+    async def _start_subscription_loop():
+        app.state._sub_stop = threading.Event()
+        app.state._sub_thread = threading.Thread(
+            target=subscription_service.subscription_loop,
+            args=(settings.download_subscription_interval_seconds, app.state._sub_stop),
+            daemon=True,
+            name="download-subscriptions",
+        )
+        app.state._sub_thread.start()
+
+    @app.on_event("shutdown")
+    async def _stop_subscription_loop():
+        stop_event = getattr(app.state, "_sub_stop", None)
+        if stop_event is not None:
+            stop_event.set()
+
+    # 后加的中间件先处理请求：体积分 → CORS → 安全头 → 登录门禁 → 只读镜像
+    # （只读镜像放最外层：写请求连登录校验都不用走，直接 403 返回）
+    app.add_middleware(MirrorReadOnlyMiddleware)
     app.add_middleware(AuthGateMiddleware)
+    # 审计在登录门禁「之外」：后注册的中间件先执行，所以它能看见被
+    # AuthGate 401/403 拒掉的请求，也留得下「是谁在试」的记录。
+    app.add_middleware(AuditMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,

@@ -1,0 +1,603 @@
+/* ==========================================================================
+   设置页 · 设计稿 1:1 复刻（gallery 方案）
+   来源：gemini-code-1792389999848.html
+   —— 只改“长什么样”，不改功能与分组；类名映射到项目现有 DOM。
+   ========================================================================== */
+
+/* ── 令牌 ───────────────────────────────────────────────────────────── */
+:root {
+  --ref-bg: #f3f5f8;
+  --ref-hairline: rgba(15, 23, 42, 0.065);
+  --ref-control-border: rgba(15, 23, 42, 0.09);
+  --ref-specular: inset 0 1px 0 0 rgba(255, 255, 255, 0.95);
+  --ref-porcelain: 0 1px 2px rgba(15, 23, 42, 0.02),
+    0 10px 28px -6px rgba(15, 23, 42, 0.035),
+    0 0 0 1px rgba(15, 23, 42, 0.048),
+    var(--ref-specular);
+  --ref-shadow-control: 0 1px 2px rgba(15, 23, 42, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  --ref-glass-bg: rgba(255, 255, 255, 0.76);
+  --ref-glass-blur: blur(28px) saturate(190%);
+  --ref-glass-shadow: 0 22px 48px -12px rgba(15, 23, 42, 0.16),
+    0 4px 14px -2px rgba(15, 23, 42, 0.06),
+    0 0 0 1px rgba(255, 255, 255, 0.85),
+    0 0 0 1.5px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.98);
+  --ref-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ref-serif-cn: 'Noto Serif SC', 'Songti SC', serif;
+  --ref-serif-en: 'Instrument Serif', Georgia, serif;
+  --ref-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+
+/* ── 页头 ───────────────────────────────────────────────────────────── */
+.settings-content .sa-hero {
+  padding: 28px 0 24px;
+  border-bottom: 1px solid var(--ref-hairline);
+  margin-bottom: 32px;
+}
+.settings-content .sa-hero-title {
+  font-family: var(--ref-serif-cn);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* ── 卡片 ───────────────────────────────────────────────────────────── */
+.settings-content .sa-section {
+  background: var(--sa-elevated);
+  border: none;
+  border-radius: 24px;
+  padding: 28px 32px;
+  box-shadow: var(--ref-porcelain);
+  display: flex;
+  flex-direction: column;
+}
+html[data-theme='dark'] .settings-content .sa-section {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 16px 36px -24px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+/* 卡片标题组：中文衬线 18/600 + 英文斜体 + 说明，底部发丝线 */
+.settings-content .panel-group-title {
+  display: block;
+  font-family: var(--ref-serif-cn);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--sa-text-primary);
+  padding-bottom: 18px;
+  margin: 0 0 6px;
+  border-bottom: 1px solid var(--ref-hairline);
+}
+.settings-content .section-en {
+  font-family: var(--ref-serif-en);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--sa-text-tertiary);
+  margin: -2px 0 4px;
+}
+.settings-content .section-desc {
+  font-size: 12.5px;
+  color: var(--sa-text-secondary);
+  margin-bottom: 8px;
+  line-height: 1.55;
+}
+
+/* 小节标签 */
+.settings-content .panel-subtitle {
+  font-family: var(--ref-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sa-text-tertiary);
+  margin: 18px 0 4px;
+}
+
+/* ── 字段行 ─────────────────────────────────────────────────────────── */
+.settings-content .field {
+  padding: 18px 0;
+  border-top: 1px solid var(--ref-hairline);
+}
+.settings-content .field:first-of-type {
+  border-top: none;
+}
+.settings-content .field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  min-height: 0;
+  padding: 0;
+  border: none;
+}
+.settings-content .field-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sa-text-primary);
+}
+.settings-content .field-hint {
+  font-size: 12.5px;
+  color: var(--sa-text-secondary);
+  margin-top: 4px;
+  line-height: 1.55;
+}
+.settings-content .field-control {
+  flex-shrink: 0;
+  width: clamp(220px, 18vw, 310px);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ── 输入框：浅灰内凹，聚焦转白 + 3px 环 ────────────────────────────── */
+.settings-content .sa-input,
+.settings-content .sa-textarea,
+.settings-content .yt-input {
+  width: 100%;
+  height: 36px;
+  padding: 0 13px;
+  border-radius: 11px;
+  border: 1px solid var(--ref-control-border);
+  background-color: #f5f7fa;
+  color: var(--sa-text-primary);
+  font-size: 13px;
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.015);
+  transition: all 0.2s var(--ref-spring);
+}
+.settings-content .sa-textarea {
+  height: auto;
+  min-height: 96px;
+  padding: 10px 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.settings-content .sa-input:hover,
+.settings-content .sa-textarea:hover,
+.settings-content .yt-input:hover {
+  background-color: #f1f4f8;
+  border-color: rgba(15, 23, 42, 0.15);
+}
+.settings-content .sa-input:focus,
+.settings-content .sa-textarea:focus,
+.settings-content .yt-input:focus {
+  background-color: var(--sa-elevated);
+  border-color: var(--sa-accent);
+  box-shadow: 0 0 0 3px var(--sa-accent-subtle);
+}
+html[data-theme='dark'] .settings-content .sa-input,
+html[data-theme='dark'] .settings-content .sa-textarea,
+html[data-theme='dark'] .settings-content .yt-input {
+  background-color: #1a1a22;
+}
+html[data-theme='dark'] .settings-content .sa-input:hover,
+html[data-theme='dark'] .settings-content .sa-textarea:hover,
+html[data-theme='dark'] .settings-content .yt-input:hover {
+  background-color: #1f1f29;
+}
+
+/* ── 按钮：白底浮起，hover 抬 1px ───────────────────────────────────── */
+.settings-content .sa-btn,
+.settings-content .yt-btn {
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--ref-control-border);
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: var(--ref-shadow-control);
+  transition: all 0.2s var(--ref-spring);
+}
+.settings-content .sa-btn:hover:not(:disabled),
+.settings-content .yt-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
+  border-color: rgba(15, 23, 42, 0.16);
+}
+.settings-content .sa-btn--primary,
+.settings-content .yt-btn--primary {
+  background: linear-gradient(180deg, #1692ff 0%, #0485f7 100%);
+  border-color: #0377de;
+  color: #fff;
+  box-shadow: 0 2px 8px var(--sa-accent-glow, rgba(4, 133, 247, 0.22)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+.settings-content .sa-btn--danger {
+  color: #e11d48;
+  border-color: rgba(225, 29, 72, 0.2);
+  background: var(--sa-elevated);
+}
+.settings-content .sa-btn--danger:hover:not(:disabled) {
+  background: #fff1f2;
+  border-color: rgba(225, 29, 72, 0.35);
+}
+html[data-theme='dark'] .settings-content .sa-btn--danger:hover:not(:disabled) {
+  background: rgba(225, 29, 72, 0.12);
+}
+.settings-content .sa-btn--icon {
+  width: 36px;
+  padding: 0;
+}
+.settings-content .sa-btn--ghost {
+  background: var(--sa-elevated);
+  border: 1px solid var(--ref-control-border);
+  color: var(--sa-text-primary);
+}
+
+/* ── 开关：42×24，轨道内凹，拇指 18 ─────────────────────────────────── */
+.settings-content .sa-switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+.settings-content .sa-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.settings-content .sa-switch .track {
+  position: absolute;
+  inset: 0;
+  display: block;
+  padding: 0;
+  border: none;
+  background-color: #e2e8f0;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.08);
+  border-radius: 99px;
+  transition: background-color 0.25s var(--ref-spring);
+}
+.settings-content .sa-switch .thumb {
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  transition: transform 0.28s var(--ref-spring);
+}
+.settings-content .sa-switch input:checked + .track {
+  background-color: var(--sa-accent);
+}
+.settings-content .sa-switch input:checked + .track .thumb {
+  transform: translate(18px, -50%);
+}
+html[data-theme='dark'] .settings-content .sa-switch .track {
+  background-color: #33333f;
+}
+
+/* ── 下拉：玻璃触发框 + 磨砂菜单 ────────────────────────────────────── */
+.settings-content .im-sel__trigger,
+.settings-content .glass-select-trigger {
+  height: 36px;
+  padding: 0 12px 0 14px;
+  border-radius: 11px;
+  border: 1px solid var(--ref-control-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(246, 248, 251, 0.88) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--sa-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--ref-shadow-control);
+  transition: all 0.22s var(--ref-spring);
+}
+.settings-content .im-sel__trigger:hover {
+  background: #fff;
+  border-color: rgba(15, 23, 42, 0.16);
+  box-shadow: 0 3px 10px -2px rgba(15, 23, 42, 0.05), inset 0 1px 0 #fff;
+}
+.settings-content .im-sel.is-open .im-sel__trigger {
+  background: #fff;
+  border-color: var(--sa-accent);
+  box-shadow: 0 0 0 3px var(--sa-accent-subtle);
+}
+.settings-content .im-sel__arrow {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.28s var(--ref-spring), color 0.2s ease;
+}
+.settings-content .im-sel.is-open .im-sel__arrow {
+  transform: rotate(180deg);
+  color: var(--sa-accent);
+}
+.settings-content .im-sel__menu,
+.settings-content .glass-select-menu {
+  border-radius: 15px;
+  padding: 6px;
+  background: var(--ref-glass-bg);
+  backdrop-filter: var(--ref-glass-blur);
+  -webkit-backdrop-filter: var(--ref-glass-blur);
+  box-shadow: var(--ref-glass-shadow);
+  transform-origin: top center;
+  transition: opacity 0.2s var(--ref-spring), transform 0.26s var(--ref-spring), visibility 0.2s;
+}
+.settings-content .im-sel__opt,
+.settings-content .glass-option {
+  border-radius: 10px;
+  padding: 8px 11px;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+.settings-content .im-sel__opt + .im-sel__opt {
+  margin-top: 2px;
+}
+.settings-content .im-sel__opt:hover {
+  background: rgba(15, 23, 42, 0.045);
+}
+.settings-content .im-sel__opt.is-on {
+  background: var(--sa-accent-subtle);
+}
+.settings-content .im-sel__opt-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+.settings-content .im-sel__opt.is-on .im-sel__opt-title {
+  color: var(--sa-accent);
+  font-weight: 600;
+}
+.settings-content .im-sel__opt-sub {
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+}
+.settings-content .im-sel__check {
+  width: 15px;
+  height: 15px;
+  transition: all 0.2s var(--ref-spring);
+}
+html[data-theme='dark'] .settings-content .im-sel__menu {
+  --ref-glass-bg: rgba(28, 28, 36, 0.82);
+}
+
+/* ── 侧栏 ───────────────────────────────────────────────────────────── */
+.settings-nav .nav-item {
+  padding: 11px 16px;
+  border-radius: 14px;
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: all 0.22s var(--ref-spring);
+}
+.settings-nav .nav-item--active {
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  font-weight: 600;
+  border-color: rgba(15, 23, 42, 0.05);
+  box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.05), 0 1px 2px rgba(15, 23, 42, 0.03),
+    0 0 0 1px rgba(15, 23, 42, 0.05), var(--ref-specular);
+}
+.settings-nav .nav-item--active .nav-label {
+  transform: translateX(2px);
+}
+.settings-nav .nav-code {
+  font-family: var(--ref-serif-en);
+  font-style: italic;
+  font-size: 16px;
+  font-weight: 400;
+}
+.settings-nav .nav-item--active .nav-code {
+  color: var(--sa-accent);
+  font-weight: 500;
+}
+
+/* ==========================================================================
+   最终裁决：现有 scoped 规则带 data-v 属性选择器，特异性更高，
+   这里用 !important 把设计稿数值钉死（本文件即设置页视觉的唯一来源）。
+   ========================================================================== */
+.settings-content .sa-section {
+  border-radius: 24px !important;
+  padding: 28px 32px !important;
+  border: none !important;
+  box-shadow: var(--ref-porcelain) !important;
+}
+.settings-content .panel-group-title {
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  padding-bottom: 18px !important;
+  border-bottom: 1px solid var(--ref-hairline) !important;
+}
+.settings-content .field-label {
+  font-size: 14px !important;
+  font-weight: 500 !important;
+}
+.settings-content .field-hint {
+  font-size: 12.5px !important;
+}
+.settings-content .sa-input,
+.settings-content .sa-textarea,
+.settings-content .yt-input {
+  height: 36px !important;
+  border-radius: 11px !important;
+  font-size: 13px !important;
+  padding: 0 13px !important;
+}
+.settings-content .sa-textarea {
+  height: auto !important;
+  min-height: 96px !important;
+  padding: 10px 13px !important;
+}
+.settings-content .sa-btn,
+.settings-content .yt-btn {
+  height: 36px !important;
+  padding: 0 16px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+}
+.settings-content .sa-btn--icon,
+.settings-content .section-refresh {
+  width: 36px !important;
+  height: 36px !important;
+  padding: 0 !important;
+  border-radius: 10px !important;
+}
+.settings-content .field-control {
+  width: clamp(220px, 18vw, 310px) !important;
+}
+.settings-content .im-sel__trigger {
+  height: 36px !important;
+  border-radius: 11px !important;
+  padding: 0 12px 0 14px !important;
+  font-size: 13px !important;
+}
+
+/* ==========================================================================
+   修正：深色主题层次 / 开关几何 / 分段控件
+   ========================================================================== */
+
+/* ── 深色：卡片要浮在页面上，不能糊成一整块黑 ── */
+html[data-theme='dark'] .settings-content .sa-section {
+  background: #17171f !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.055),
+    0 16px 36px -24px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+html[data-theme='dark'] .settings-content .field {
+  border-top-color: rgba(255, 255, 255, 0.06) !important;
+}
+html[data-theme='dark'] .settings-content .panel-group-title {
+  border-bottom-color: rgba(255, 255, 255, 0.07) !important;
+}
+html[data-theme='dark'] .settings-content .sa-input,
+html[data-theme='dark'] .settings-content .sa-textarea {
+  background-color: #20202b !important;
+  border-color: rgba(255, 255, 255, 0.09) !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35) !important;
+}
+html[data-theme='dark'] .settings-content .sa-input:hover {
+  background-color: #24242f !important;
+}
+html[data-theme='dark'] .settings-content .sa-btn,
+html[data-theme='dark'] .settings-content .yt-btn {
+  background: #1e1e28 !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+html[data-theme='dark'] .settings-nav .nav-item--active {
+  background: #1b1b24 !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 6px 18px -6px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+/* ── 开关：42×24，拇指 18，行程 18（与设计稿一致） ── */
+.settings-content .sa-switch .track {
+  width: 42px !important;
+  height: 24px !important;
+  inset: 0 !important;
+  padding: 0 !important;
+  display: block !important;
+  border-radius: 99px !important;
+  box-sizing: border-box !important;
+}
+.settings-content .sa-switch .thumb {
+  width: 18px !important;
+  height: 18px !important;
+  left: 3px !important;
+  top: 3px !important;
+  margin: 0 !important;
+  border-radius: 50% !important;
+  transform: none;
+  transition: transform 0.28s var(--ref-spring) !important;
+}
+.settings-content .sa-switch input:checked + .track .thumb {
+  transform: translateX(18px) !important;
+}
+
+/* ── 分段控件（稳定版/nightly、单视频/整个列表）：玻璃胶囊 + 浮起块 ── */
+.settings-content .yt-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: none;
+  border-radius: 99px;
+  background: color-mix(in oklab, var(--sa-text-primary) 6%, transparent);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.settings-content .yt-mode-btn {
+  height: 28px !important;
+  padding: 0 14px !important;
+  border: none !important;
+  border-radius: 99px !important;
+  background: transparent !important;
+  color: var(--sa-text-secondary) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  transition: all 0.22s var(--ref-spring);
+}
+.settings-content .yt-mode-btn:hover {
+  color: var(--sa-text-primary) !important;
+}
+.settings-content .yt-mode-btn.is-on {
+  background: var(--sa-elevated) !important;
+  color: var(--sa-text-primary) !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;
+}
+html[data-theme='dark'] .settings-content .yt-mode {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+html[data-theme='dark'] .settings-content .yt-mode-btn.is-on {
+  background: #262631 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+/* ==========================================================================
+   修正：嵌套边框 / 文字贴边（YouTube 下载、待整理）
+   ========================================================================== */
+
+/* YouTube 下载：内部块改成“发丝线分隔”，不再套第二层框 */
+.settings-content .yt-block {
+  border: none !important;
+  border-top: 1px solid var(--ref-hairline) !important;
+  border-radius: 0 !important;
+  padding: 16px 0 !important;
+}
+.settings-content .yt-block:first-of-type {
+  border-top: none !important;
+}
+/* 引擎状态块：浅色底 + 圆角，不画边框 */
+.settings-content .yt-engine {
+  border: none !important;
+  background: color-mix(in oklab, var(--sa-text-primary) 3.5%, transparent) !important;
+  border-radius: 14px !important;
+  padding: 16px 18px !important;
+}
+html[data-theme='dark'] .settings-content .yt-engine {
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+/* 下载任务条目：单层描边 + 足够内边距 */
+.settings-content .yt-job {
+  border: 1px solid var(--ref-hairline) !important;
+  border-radius: 14px !important;
+  padding: 14px 16px !important;
+  background: transparent !important;
+}
+.settings-content .yt-jobs {
+  gap: 10px !important;
+}
+.settings-content .yt-mode {
+  margin-left: 2px;
+}
+
+/* 待整理：卡片内边距与圆角回到同一套 */
+.settings-content .action-card {
+  border: 1px solid var(--ref-hairline) !important;
+  border-radius: 16px !important;
+  padding: 16px 18px !important;
+}
+.settings-content .action-card:hover {
+  border-color: rgba(15, 23, 42, 0.14) !important;
+}
+html[data-theme='dark'] .settings-content .action-card {
+  border-color: rgba(255, 255, 255, 0.07) !important;
+}

@@ -2,7 +2,9 @@
 
 一次连续播放（同一视频 10 分钟内再次上报）合并成一行 WatchPlay。
 拖进度条只按墙钟累计时长，避免 seek 把观看秒数撑爆。
-不足 MIN_RANK_SECONDS 且未看完的记录不进排行。
+**有效播放 = 完播，或累计观看 ≥ min(15 秒, 时长 × 10%)**（2026-10-28 业主口径）；
+不足阈值的记录不进任何排行/统计。建行与计次是两件事：整次播放的第一帧就会建行，
+但只有达到阈值才算「一次播放」——所有出口都必须走 qualified_play_clause()。
 """
 
 from __future__ import annotations
@@ -28,19 +30,57 @@ from app.services.stats_service import DEFAULT_LIMIT, MAX_LIMIT, _rank_item
 
 RESUME_WINDOW_SECONDS = 600.0
 MAX_TICK_SECONDS = 45.0
-MIN_RANK_SECONDS = 20.0
 COMPLETE_RATIO = 0.9
+
+# 「一次播放」的有效阈值 = min(15 秒, 时长 × 10%)：
+# 3 分钟打歌舞台按 15 秒封顶；60 秒短片按 6 秒；30 秒按 3 秒。时长未知/异常时退回 15 秒。
+MIN_PLAY_SECONDS = 15.0
+MIN_PLAY_RATIO = 0.10
 
 
 def _now() -> datetime:
     return datetime.utcnow()
 
 
+def min_play_seconds(duration: Optional[float]) -> float:
+    """有效播放阈值（秒）：min(MIN_PLAY_SECONDS, 时长 × MIN_PLAY_RATIO)。
+
+    时长缺失或非正数时不能用比例（会退化成 0 秒，任何残留行都算一次播放），
+    直接退回 15 秒上限。
+    """
+    d = float(duration or 0.0)
+    if d <= 0:
+        return MIN_PLAY_SECONDS
+    return min(MIN_PLAY_SECONDS, d * MIN_PLAY_RATIO)
+
+
 def _qualify():
+    """有效播放判定（SQL 条件）：完播，或累计观看达到该行的时长阈值。"""
+    ratio = WatchPlay.source_duration * MIN_PLAY_RATIO
+    threshold = case(
+        (
+            or_(
+                WatchPlay.source_duration.is_(None),
+                WatchPlay.source_duration <= 0,
+            ),
+            MIN_PLAY_SECONDS,
+        ),
+        (ratio < MIN_PLAY_SECONDS, ratio),
+        else_=MIN_PLAY_SECONDS,
+    )
     return or_(
         WatchPlay.completed.is_(True),
-        WatchPlay.seconds_watched >= MIN_RANK_SECONDS,
+        WatchPlay.seconds_watched >= threshold,
     )
+
+
+def qualified_play_clause():
+    """对外暴露的有效播放条件。
+
+    热度榜（stats_service._heat_rows）等其它出口**必须**用这个，而不是裸数行数，
+    否则 0 秒的误触记录会被算成播放，和观看榜对不上。
+    """
+    return _qualify()
 
 
 def record_watch(

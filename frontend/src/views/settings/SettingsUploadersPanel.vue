@@ -29,10 +29,25 @@ function ruleSummary(item: UploaderItem) {
   return types.map((t) => VIDEO_TYPE_LABEL[t] || t).join('、')
 }
 
+/** 地址栏展示值：已有频道地址优先；只有 channel_id 时显示可用的频道 URL */
+function channelAddress(item: UploaderItem): string {
+  const url = (item.youtube_channel_url || '').trim()
+  if (url) return url
+  const cid = (item.youtube_channel_id || '').trim()
+  return cid ? `https://www.youtube.com/channel/${cid}` : ''
+}
+
+/** 手动改地址：立即清掉旧的 channel_id（旧 ID 可能属于另一个频道） */
+function onChannelInput(item: UploaderItem, ev: Event) {
+  item.youtube_channel_url = (ev.target as HTMLInputElement).value
+  item.youtube_channel_id = ''
+}
+
 const fixedCount = computed(
   () => items.value.filter((i) => (i.video_types || []).length || i.youtube_channel_url).length,
 )
-const channelCount = computed(() => items.value.filter((i) => i.youtube_channel_url).length)
+/** 真正勾选了「缺失检测」的数量（仅填了频道地址不算） */
+const channelCount = computed(() => items.value.filter((i) => i.missing_check_enabled).length)
 
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
@@ -55,6 +70,7 @@ async function load() {
       ...i,
       video_types: [...(i.video_types || [])],
       youtube_channel_url: i.youtube_channel_url || '',
+      youtube_channel_id: i.youtube_channel_id || '',
       missing_check_enabled: !!i.missing_check_enabled,
     }))
   } catch (e) {
@@ -74,6 +90,7 @@ async function persist(successText?: string) {
         name: i.name,
         video_types: [...(i.video_types as string[])],
         youtube_channel_url: i.youtube_channel_url || '',
+        youtube_channel_id: i.youtube_channel_id || '',
         missing_check_enabled: !!i.missing_check_enabled,
       }))
     await uploadersApi.saveRules(payload)
@@ -105,16 +122,19 @@ async function clearRule(item: UploaderItem) {
 
 /** 频道地址：失焦时保存（与固定类型同一套整体覆盖） */
 async function onChannelBlur(item: UploaderItem) {
-  const url = (item.youtube_channel_url || '').trim()
-  item.youtube_channel_url = url
+  const url = channelAddress(item).trim()
+  if (!item.youtube_channel_url && url) item.youtube_channel_url = url
   if (url) await persist(`已保存「${item.name}」的频道地址`)
 }
 
 async function onChannelToggle(item: UploaderItem, enabled: boolean) {
-  if (enabled && !(item.youtube_channel_url || '').trim()) {
+  if (enabled && !channelAddress(item).trim()) {
     item.missing_check_enabled = false
     message.error('开启缺失检测前请先填写 YouTube 频道地址')
     return
+  }
+  if (enabled && !item.youtube_channel_url) {
+    item.youtube_channel_url = channelAddress(item)
   }
   item.missing_check_enabled = enabled
   await persist(
@@ -127,19 +147,40 @@ async function onChannelToggle(item: UploaderItem, enabled: boolean) {
 /** 频道地址即时校验：解析出频道 ID 并回读频道名，确认地址写对了（出网 1-2 quota，不落库） */
 const probing = ref('')
 async function testChannel(item: UploaderItem) {
-  const url = (item.youtube_channel_url || '').trim()
+  const url = channelAddress(item).trim()
   if (!url) {
     message.error('请先填写 YouTube 频道地址')
     return
   }
+  if (!item.youtube_channel_url) item.youtube_channel_url = url
   probing.value = item.name
   try {
     const r = await uploadersApi.channelProbe(url)
-    message.success(`地址有效：${r.title || r.channel_id}（${r.channel_id}）`)
+    // 回填 channel_id（改名后按频道归组）；不触碰缺失检测开关
+    item.youtube_channel_id = r.channel_id
+    await persist(`地址有效：${r.title || r.channel_id}（${r.channel_id}）`)
   } catch (e) {
     message.error((e as Error).message)
   } finally {
     probing.value = ''
+  }
+}
+
+/** 补全库内视频的 channel_id（读 .info.json 侧车，不联网） */
+const backfilling = ref(false)
+async function backfillChannelIds() {
+  backfilling.value = true
+  try {
+    const r = await uploadersApi.backfillChannelIds({ include_rules: true })
+    const v = r.videos
+    message.success(
+      `频道 ID 补全：更新 ${v.updated} 条（扫描 ${v.scanned}，无侧车 ${v.no_sidecar}，侧车无 ID ${v.no_channel_id}）`,
+    )
+    await load()
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    backfilling.value = false
   }
 }
 
@@ -159,6 +200,15 @@ onMounted(() => {
         <input v-model="onlyFixed" type="checkbox" />
         只看已配置（{{ fixedCount }}）
       </label>
+      <button
+        class="sa-btn-ghost"
+        type="button"
+        :disabled="loading || saving || backfilling"
+        title="从视频旁边的 .info.json 回填 YouTube channel_id（不联网）"
+        @click="backfillChannelIds"
+      >
+        {{ backfilling ? '补全中…' : '补全频道 ID' }}
+      </button>
       <button class="sa-btn-ghost" type="button" :disabled="loading || saving" @click="load">
         <RefreshOutlined :size="13" />
         刷新
@@ -217,14 +267,20 @@ onMounted(() => {
           </div>
           <div class="uploader-line uploader-channel">
             <input
-              v-model="item.youtube_channel_url"
+              :value="channelAddress(item)"
               class="uploader-channel-input"
               type="text"
               placeholder="YouTube 频道地址（@handle / channel 链接 / UC ID），填后可检测缺失视频"
               :disabled="saving"
+              @input="onChannelInput(item, $event)"
               @blur="onChannelBlur(item)"
               @keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
             />
+            <span
+              v-if="item.youtube_channel_id"
+              class="uploader-channel-id"
+              :title="item.youtube_channel_id"
+            >{{ item.youtube_channel_id }}</span>
             <label class="uploader-check">
               <input
                 :checked="item.missing_check_enabled"
@@ -380,6 +436,16 @@ onMounted(() => {
 .uploader-channel-input:disabled {
   opacity: 0.6;
 }
+.uploader-channel-id {
+  flex: none;
+  max-width: 168px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--sa-text-tertiary);
+}
 .uploader-check {
   display: inline-flex;
   align-items: center;
@@ -400,6 +466,9 @@ onMounted(() => {
   }
   .uploader-channel {
     flex-wrap: nowrap;
+  }
+  .uploader-channel-id {
+    display: none;
   }
 }
 </style>

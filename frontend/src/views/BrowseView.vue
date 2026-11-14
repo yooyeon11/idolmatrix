@@ -1,28 +1,19 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import SaHeader from '@/components/SaHeader.vue'
 import SaPagination from '@/components/SaPagination.vue'
 import SaDensitySwitch from '@/components/SaDensitySwitch.vue'
-import SaSelect from '@/components/SaSelect.vue'
 import { musicVideosApi } from '@/api/musicVideos'
 import { useSettingsStore } from '@/stores/settings'
 import { useGridDensity, useGridPageSize } from '@/composables/useGridDensity'
 import type { MusicVideo } from '@/types/models'
 import { RESOLUTION_LABEL, RESOLUTION_OPTIONS, VIDEO_TYPE_LABEL, VIDEO_TYPE_OPTIONS } from '@/types/models'
-import {
-  AppOutlined,
-  CloseOutlined,
-  DownOutlined,
-  FolderOutlined,
-  MovieOutlined,
-  ResolutionOutlined,
-  SearchOutlined,
-  SortOutlined,
-} from '@/components/icons'
+import { CloseOutlined, FolderOutlined, MovieOutlined, SearchOutlined } from '@/components/icons'
 import { videoPath } from '@/utils/routes'
-import { formatVideoSongs } from '@/utils/format'
+import { resolutionLabel } from '@/utils/resolution'
+import { formatDuration } from '@/utils/format'
 import { IMG_W_CARD } from '@/utils/imageSizes'
 
 const router = useRouter()
@@ -141,53 +132,98 @@ function onFolderPageChange(p: number) {
   void loadFolders(p).then(() => window.scrollTo({ top: 0 }))
 }
 
-// 移动端抽屉内的排序单选列表（与桌面端排序下拉选项保持一致）
+// 排序选项（桌面下拉 / 移动端共用一份）
 const SORT_OPTIONS = [
   { value: 'created_desc', label: '最近上传' },
-  { value: 'performance_date_desc', label: '表演日期（新→旧）' },
-  { value: 'performance_date_asc', label: '表演日期（旧→新）' },
-  { value: 'published_date_desc', label: '上传日期（新→旧）' },
-  { value: 'published_date_asc', label: '上传日期（旧→新）' },
+  { value: 'performance_date', label: '表演日期' },
+  { value: 'published_date', label: '上传日期' },
   { value: 'size_desc', label: '体积（大→小）' },
   { value: 'size_asc', label: '体积（小→大）' },
 ]
-// 桌面端排序下拉（SaSelect 单选，与类型下拉同一框型）
-const sortOptions = SORT_OPTIONS.map((o) => ({ label: o.label, value: o.value }))
+
+/** 「表演日期 / 上传日期」= 单选项，再点一次在正序/倒序之间切换。 */
+const DATE_SORTS = ['performance_date', 'published_date'] as const
+function toggleDateSort(base: string, current: string): string {
+  const isAsc = current === `${base}_asc`
+  return isAsc ? `${base}_desc` : `${base}_asc`
+}
+
 
 // ===== 移动端紧凑工具栏 =====
-// ≤640px：搜索框缩短，类型 / 分辨率 / 排序 / 视图 / 宽松度全部收成图标按钮并排在搜索一栏，
-// 各自的选项走下拉菜单（原来的 ⚙ 底部抽屉已下线）；当前生效的筛选靠下方激活条显示。
 const narrowMq = window.matchMedia('(max-width: 640px)')
 const isNarrow = ref(narrowMq.matches)
 function onNarrowChange(e: MediaQueryListEvent) {
   isNarrow.value = e.matches
 }
 
-const sortDropdownOptions = computed(() =>
-  SORT_OPTIONS.map((o) => ({ label: o.label, key: o.value })),
-)
-function onSortSelect(key: string | number) {
-  sortOrder.value = String(key)
+// ===== 顶栏三个自绘下拉（复刻样板：实色菜单 + popIn 动效）=====
+// 只做「点开 / 关闭」与「点外部收起」，选项内容仍用我们自己的：
+// 类型 = VIDEO_TYPE_OPTIONS，分辨率 = RESOLUTION_OPTIONS（按条数裁剪），排序 = SORT_OPTIONS。
+type MenuKey = 'type' | 'res' | 'sort'
+const openMenu = ref<MenuKey | ''>('')
+
+function toggleMenu(k: MenuKey) {
+  openMenu.value = openMenu.value === k ? '' : k
 }
-function toggleViewMode() {
-  viewMode.value = viewMode.value === 'videos' ? 'folders' : 'videos'
+function closeMenus() {
+  openMenu.value = ''
+}
+function onDocumentClick() {
+  closeMenus()
 }
 
-// 图标按钮的 title / aria：图标本身不显示文字，选中值要在提示里说清楚
-const resolutionIconLabel = computed(() =>
-  activeResolution.value ? `分辨率：${resolutionName(activeResolution.value)}` : '分辨率：全部',
+const sortLabel = computed(() => {
+  const raw = sortOrder.value
+  const bare = raw.replace(/_(asc|desc)$/, '')
+  const opt = SORT_OPTIONS.find((o) => o.value === raw) ?? SORT_OPTIONS.find((o) => o.value === bare)
+  const arrow = raw.endsWith('_asc') ? ' ↑' : raw.endsWith('_desc') ? ' ↓' : ''
+  return (opt?.label ?? '最近上传') + arrow
+})
+const typeSummary = computed(() => {
+  const n = activeTypes.value.length
+  if (n === 0) return '全部类型'
+  if (n === 1) return videoTypeName(activeTypes.value[0])
+  return `已选 ${n} 类`
+})
+const typeHint = computed(() =>
+  activeTypes.value.length ? `已选 ${activeTypes.value.length} 类` : '未选择 = 全部',
 )
-const sortIconLabel = computed(
-  () => `排序：${SORT_OPTIONS.find((o) => o.value === sortOrder.value)?.label ?? '最近上传'}`,
+/** 空数组 = 不过滤（全部），所以「全部勾选」也归一成空数组 */
+function typeChecked(v: string) {
+  return activeTypes.value.length === 0 || activeTypes.value.includes(v)
+}
+function toggleType(v: string, on: boolean) {
+  const all = VIDEO_TYPE_OPTIONS.map((o) => o.value)
+  const set = new Set(activeTypes.value.length ? activeTypes.value : all)
+  if (on) set.add(v)
+  else set.delete(v)
+  activeTypes.value = set.size >= all.length ? [] : [...set]
+}
+function selectAllTypes() {
+  activeTypes.value = []
+}
+function clearTypes() {
+  activeTypes.value = []
+}
+const resolutionLabelText = computed(() =>
+  activeResolution.value ? resolutionName(activeResolution.value) : '全部画质',
 )
-const viewIconLabel = computed(() =>
-  viewMode.value === 'videos' ? '切换到文件夹视图' : '切换到视频视图',
-)
-
-// 「全部」哨兵：n-dropdown 的 key 不适合直接用空串（移动端图标菜单里也要能一键还原）
-const RES_ALL_KEY = '__all'
-
-const typeSelectOptions = VIDEO_TYPE_OPTIONS.map((o) => ({ label: o.label, value: o.value }))
+function pickResolution(key: string) {
+  activeResolution.value = key
+  closeMenus()
+}
+function pickSort(key: string) {
+  const bare = key.replace(/_(asc|desc)$/, '')
+  if (key !== sortOrder.value && DATE_SORTS.includes(bare as (typeof DATE_SORTS)[number])
+      && sortOrder.value.replace(/_(asc|desc)$/, '') === bare) {
+    sortOrder.value = toggleDateSort(bare, sortOrder.value)
+  } else if (DATE_SORTS.includes(key as (typeof DATE_SORTS)[number])) {
+    sortOrder.value = `${key}_desc`
+  } else {
+    sortOrder.value = key
+  }
+  closeMenus()
+}
 
 /**
  * 分辨率菜单项：只列当前筛选条件下有条数的档位（口径与统计页一致，空档位不展示）。
@@ -203,21 +239,6 @@ const resolutionOptions = computed(() => {
   }
   return list
 })
-
-const resolutionDropdownOptions = computed(() => [
-  { label: '全部', key: RES_ALL_KEY },
-  ...resolutionOptions.value.map((o) => ({
-    label: resolutionFacetsReady.value
-      ? `${o.label} · ${resolutionFacets.value[o.key] || 0}`
-      : o.label,
-    key: o.key,
-  })),
-])
-
-function onResolutionSelect(key: string | number) {
-  const value = String(key)
-  activeResolution.value = value === RES_ALL_KEY ? '' : value
-}
 
 function resolutionName(key: string) {
   return RESOLUTION_LABEL[key] || key
@@ -302,12 +323,36 @@ watch(activeTypes, () => void loadResolutionFacets())
 onMounted(() => {
   isNarrow.value = narrowMq.matches
   narrowMq.addEventListener('change', onNarrowChange)
+  document.addEventListener('click', onDocumentClick)
   void loadResolutionFacets()
 })
-onBeforeUnmount(() => narrowMq.removeEventListener('change', onNarrowChange))
+onBeforeUnmount(() => {
+  narrowMq.removeEventListener('change', onNarrowChange)
+  document.removeEventListener('click', onDocumentClick)
+})
 // 一键清空：走既有 watch 触发防抖刷新，避免与 watcher 重复请求
 function clearSearch() {
   searchQuery.value = ''
+}
+
+// 搜索收起/展开：默认只是一个放大镜，点击后才展开输入框
+const searchOpen = ref(false)
+const searchInputEl = ref<HTMLInputElement | null>(null)
+
+async function openSearch() {
+  searchOpen.value = true
+  await nextTick()
+  searchInputEl.value?.focus()
+}
+
+function onSearchBlur() {
+  // 有内容时保持展开，避免输入途中误收起
+  if (!searchQuery.value) searchOpen.value = false
+}
+
+function closeSearch() {
+  searchInputEl.value?.blur()
+  if (!searchQuery.value) searchOpen.value = false
 }
 // 文件夹切换
 watch(currentFolder, () => {
@@ -323,167 +368,183 @@ watch(pageSize, (v) => {
   <div class="mv-page">
     <SaHeader />
     <div class="mv-container">
-      <div class="page-head">
-        <div class="page-title-wrap">
-          <h1 class="page-title">浏览</h1>
-          <span class="page-count">{{ viewMode === 'folders' ? folderBadgeTotal : total }}</span>
+      <div class="browse-head">
+        <div class="head-left">
+          <div class="title-wrap">
+            <h1 class="browse-title">浏览</h1>
+            <span class="count-badge">
+              {{ viewMode === 'folders' ? folderBadgeTotal : total }}
+            </span>
+          </div>
+
         </div>
 
-        <div class="head-tools">
-          <div class="search-box">
-            <SearchOutlined :size="15" />
-            <input
-              v-model="searchQuery"
-              class="search-input"
-              type="text"
-              :placeholder="isNarrow ? '搜索…' : '搜索视频、歌曲、艺人、组合、来源 ID…'"
-            />
-            <button
-              v-if="searchQuery"
-              class="search-clear"
-              type="button"
-              aria-label="清空搜索"
-              @click="clearSearch"
-            >
-              <CloseOutlined :size="12" />
-            </button>
-          </div>
-          <!-- 移动端紧凑工具栏：与搜索同一行，全部图标化（无文字），各自下拉选择 -->
-          <div class="head-icons">
+        <div class="head-right">
+          <div class="control-bar">
+            <div class="search-pill" :class="{ 'is-open': searchOpen }" :title="searchOpen ? '' : '搜索'">
+              <button
+                v-if="!searchOpen"
+                class="search-trigger"
+                type="button"
+                aria-label="展开搜索"
+                @click.stop="openSearch"
+              >
+                <SearchOutlined :size="15" />
+              </button>
+              <template v-else>
+                <SearchOutlined :size="14" class="search-glyph" />
+                <input
+                  ref="searchInputEl"
+                  v-model="searchQuery"
+                  type="text"
+                  :placeholder="isNarrow ? '搜索…' : '过滤当前结果…'"
+                  @blur="onSearchBlur"
+                  @keydown.esc="closeSearch"
+                />
+                <button
+                  v-if="searchQuery"
+                  class="search-clear"
+                  type="button"
+                  aria-label="清空搜索"
+                  @click="clearSearch"
+                >
+                  <CloseOutlined :size="11" />
+                </button>
+              </template>
+            </div>
 
-            <n-dropdown
-              :options="resolutionDropdownOptions"
-              trigger="click"
-              placement="bottom-end"
-              @select="onResolutionSelect"
-            >
+            <!-- (1) 视频类型：多选 -->
+            <div class="pop-group" :class="{ open: openMenu === 'type' }">
               <button
-                class="head-icon"
-                :class="{ 'head-icon--on': activeResolution !== '' }"
+                class="pop-btn"
+                :class="{ 'is-active': activeTypes.length > 0 }"
                 type="button"
-                :title="resolutionIconLabel"
-                :aria-label="resolutionIconLabel"
+                @click.stop="toggleMenu('type')"
               >
-                <ResolutionOutlined :size="16" />
+                <span>视频类型: <strong>{{ typeSummary }}</strong></span>
+                <svg class="caret" viewBox="0 0 10 6" width="10" height="6" fill="none"><path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
-            </n-dropdown>
-            <n-dropdown
-              :options="sortDropdownOptions"
-              trigger="click"
-              placement="bottom-end"
-              @select="onSortSelect"
-            >
+
+              <div class="pop-menu pop-menu--type" @click.stop>
+                <div class="pop-head">
+                  <span class="pop-cap">SELECT MULTIPLE</span>
+                  <div class="pop-actions">
+                    <button type="button" class="link" @click="selectAllTypes">全选</button>
+                    <span class="pop-sep">|</span>
+                    <button type="button" class="link muted" @click="clearTypes">清空</button>
+                  </div>
+                </div>
+
+                <div class="type-grid">
+                  <label v-for="o in VIDEO_TYPE_OPTIONS" :key="o.value" class="type-row">
+                    <input
+                      type="checkbox"
+                      :checked="typeChecked(o.value)"
+                      @change="toggleType(o.value, ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>{{ o.label }}</span>
+                  </label>
+                </div>
+
+                <div class="pop-foot">
+                  <span class="pop-hint">{{ typeHint }}</span>
+                  <button class="pop-done" type="button" @click="closeMenus">完成筛选</button>
+                </div>
+              </div>
+            </div>
+
+            <span class="control-sep" />
+
+            <!-- (2) 分辨率：单选 -->
+            <div class="pop-group" :class="{ open: openMenu === 'res' }">
               <button
-                class="head-icon"
-                :class="{ 'head-icon--on': sortOrder !== 'created_desc' }"
+                class="pop-btn"
+                :class="{ 'is-active': activeResolution !== '' }"
                 type="button"
-                :title="sortIconLabel"
-                :aria-label="sortIconLabel"
+                @click.stop="toggleMenu('res')"
               >
-                <SortOutlined :size="16" />
+                <span>分辨率: <strong>{{ resolutionLabelText }}</strong></span>
+                <svg class="caret" viewBox="0 0 10 6" width="10" height="6" fill="none"><path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
-            </n-dropdown>
-            <button
-              class="head-icon"
-              :class="{ 'head-icon--on': viewMode === 'folders' }"
-              type="button"
-              :title="viewIconLabel"
-              :aria-label="viewIconLabel"
-              @click="toggleViewMode"
-            >
-              <!-- 图标显示「将要切到的视图」：视频视图时显示文件夹图标 -->
-              <FolderOutlined v-if="viewMode === 'videos'" :size="16" />
-              <AppOutlined v-else :size="16" />
-            </button>
-            <SaDensitySwitch icon-only />
-          </div>
-          <!-- display: contents：桌面端不参与布局，移动端整体隐藏 -->
-          <div class="head-extra">
-            <SaDensitySwitch />
-            <div class="view-switch" role="tablist">
+
+              <div class="pop-menu pop-menu--res" @click.stop>
+                <button
+                  class="opt-row"
+                  :class="{ on: activeResolution === '' }"
+                  type="button"
+                  @click="pickResolution('')"
+                >
+                  <span>全部画质</span>
+                  <span v-if="activeResolution === ''" class="tick">✓</span>
+                </button>
+                <button
+                  v-for="o in resolutionOptions"
+                  :key="o.key"
+                  class="opt-row"
+                  :class="{ on: activeResolution === o.key }"
+                  type="button"
+                  @click="pickResolution(o.key)"
+                >
+                  <span>
+                    {{ o.label }}
+                    <template v-if="resolutionFacetsReady">· {{ resolutionFacets[o.key] || 0 }}</template>
+                  </span>
+                  <span v-if="activeResolution === o.key" class="tick">✓</span>
+                </button>
+              </div>
+            </div>
+
+            <span class="control-sep" />
+
+            <!-- (3) 排序：单选 -->
+            <div class="pop-group pop-group--right" :class="{ open: openMenu === 'sort' }">
               <button
-                class="view-btn"
-                :class="{ 'view-btn--active': viewMode === 'videos' }"
-                role="tab"
-                @click="viewMode = 'videos'"
+                class="pop-btn"
+                :class="{ 'is-active': sortOrder !== 'created_desc' }"
+                type="button"
+                @click.stop="toggleMenu('sort')"
               >
-                <AppOutlined :size="15" />
-                视频
+                <span>排序: <strong>{{ sortLabel }}</strong></span>
+                <svg class="caret" viewBox="0 0 10 6" width="10" height="6" fill="none"><path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
-              <button
-                class="view-btn"
-                :class="{ 'view-btn--active': viewMode === 'folders' }"
-                role="tab"
-                @click="viewMode = 'folders'"
-              >
-                <FolderOutlined :size="15" />
-                文件夹
-              </button>
+
+              <div class="pop-menu pop-menu--sort" @click.stop>
+                <button
+                  v-for="o in SORT_OPTIONS"
+                  :key="o.value"
+                  class="opt-row"
+                  :class="{ on: sortOrder === o.value || sortOrder.replace(/_(asc|desc)$/, '') === o.value }"
+                  type="button"
+                  @click="pickSort(o.value)"
+                >
+                  <span>{{ o.label }}</span>
+                  <span v-if="sortOrder === o.value" class="tick">✓</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <div class="type-chips">
-        <button
-          class="chip"
-          :class="{ 'chip--active': activeTypes.length === 0 }"
-          @click="activeTypes = []"
-        >
-          全部
-        </button>
-        <div class="type-select-wrap">
-          <SaSelect
-            v-model="activeTypes"
-            :options="typeSelectOptions"
-            multiple
-            max-tag-count="responsive"
-            clearable
-            placeholder="类型"
-          />
-        </div>
-        <n-dropdown
-          :options="resolutionDropdownOptions"
-          trigger="click"
-          @select="onResolutionSelect"
-        >
-          <button
-            class="chip type-chip"
-            :class="{ 'chip--active': activeResolution !== '' }"
-          >
-            {{ activeResolution ? resolutionName(activeResolution) : '分辨率' }}
-            <DownOutlined :size="12" />
-          </button>
-        </n-dropdown>
-        <div class="sort-select-wrap">
-          <SaSelect
-            v-model="sortOrder"
-            :options="sortOptions"
-            :clearable="false"
-            menu-auto-width
-          />
-        </div>
-      </div>
+          <SaDensitySwitch icon-only />
 
-      <!-- 移动端激活筛选条：类型/分辨率收进抽屉后，已生效的筛选在此保持可见，点 ✕ 撤销 -->
-      <div v-if="activeTypes.length || activeResolution" class="active-filters">
-        <button
-          v-for="t in activeTypes"
-          :key="t"
-          class="chip chip--active filter-chip"
-          @click="activeTypes = activeTypes.filter((x) => x !== t)"
-        >
-          {{ videoTypeName(t) }}
-          <CloseOutlined :size="12" />
-        </button>
-        <button
-          v-if="activeResolution"
-          class="chip chip--active filter-chip"
-          @click="activeResolution = ''"
-        >
-          {{ resolutionName(activeResolution) }}
-          <CloseOutlined :size="12" />
-        </button>
+          <div class="browse-view-switch" role="tablist">
+            <button
+              class="browse-view-btn"
+              :class="{ 'browse-view-btn--active': viewMode === 'videos' }"
+              role="tab"
+              @click="viewMode = 'videos'"
+            >
+              视频
+            </button>
+            <button
+              class="browse-view-btn"
+              :class="{ 'browse-view-btn--active': viewMode === 'folders' }"
+              role="tab"
+              @click="viewMode = 'folders'"
+            >
+              文件夹
+            </button>
+          </div>
+        </div>
       </div>
 
       <div
@@ -500,29 +561,31 @@ watch(pageSize, (v) => {
             <a
               v-for="mv in gridVideos"
               :key="mv.id"
-              class="poster-card"
+              class="gallery-card"
               :href="videoPath(mv.uid)"
               @click.prevent="goVideo(mv)"
             >
-              <div class="poster-cover">
+              <div class="gc-cover">
                 <img
                   v-if="thumbUrl(mv)"
                   :src="thumbUrl(mv)!"
                   :alt="mv.name"
-                  class="poster-img"
+                  class="gc-img"
                   loading="lazy"
                   @error="onThumbError(mv)"
                 />
-                <div v-else class="poster-img poster-placeholder">
+                <div v-else class="gc-img gc-placeholder">
                   <MovieOutlined :size="26" />
                 </div>
               </div>
-              <div class="poster-title" :title="mv.name">{{ mv.name }}</div>
-              <div class="poster-meta">
-                <span>{{ videoTypeName(mv.video_type) }}</span>
-                <span v-if="formatVideoSongs(mv.songs, mv.song_name, mv.song_chinese_name)">
-                  {{ formatVideoSongs(mv.songs, mv.song_name, mv.song_chinese_name) }}
-                </span>
+              <h3 class="gc-title" :title="mv.name">{{ mv.name }}</h3>
+              <div class="gc-foot">
+                <span class="gc-type">{{ videoTypeName(mv.video_type) }}</span>
+                <div class="gc-nums">
+                  <span class="gc-dur">{{ formatDuration(mv.duration) }}</span>
+                  <span class="gc-dot">●</span>
+                  <span class="gc-res">{{ resolutionLabel(mv.width, mv.height) }}</span>
+                </div>
               </div>
             </a>
           </div>
@@ -580,29 +643,31 @@ watch(pageSize, (v) => {
             <a
               v-for="mv in folderVideos"
               :key="mv.id"
-              class="poster-card"
+              class="gallery-card"
               :href="videoPath(mv.uid)"
               @click.prevent="goVideo(mv)"
             >
-              <div class="poster-cover">
+              <div class="gc-cover">
                 <img
                   v-if="thumbUrl(mv)"
                   :src="thumbUrl(mv)!"
                   :alt="mv.name"
-                  class="poster-img"
+                  class="gc-img"
                   loading="lazy"
                   @error="onThumbError(mv)"
                 />
-                <div v-else class="poster-img poster-placeholder">
+                <div v-else class="gc-img gc-placeholder">
                   <MovieOutlined :size="26" />
                 </div>
               </div>
-              <div class="poster-title" :title="mv.name">{{ mv.name }}</div>
-              <div class="poster-meta">
-                <span>{{ videoTypeName(mv.video_type) }}</span>
-                <span v-if="formatVideoSongs(mv.songs, mv.song_name, mv.song_chinese_name)">
-                  {{ formatVideoSongs(mv.songs, mv.song_name, mv.song_chinese_name) }}
-                </span>
+              <h3 class="gc-title" :title="mv.name">{{ mv.name }}</h3>
+              <div class="gc-foot">
+                <span class="gc-type">{{ videoTypeName(mv.video_type) }}</span>
+                <div class="gc-nums">
+                  <span class="gc-dur">{{ formatDuration(mv.duration) }}</span>
+                  <span class="gc-dot">●</span>
+                  <span class="gc-res">{{ resolutionLabel(mv.width, mv.height) }}</span>
+                </div>
               </div>
             </a>
           </div>
@@ -630,17 +695,19 @@ watch(pageSize, (v) => {
   min-height: 100vh;
 }
 .mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px 64px;
+  padding: 0 var(--sa-gutter, 36px) 64px;
 }
 
 .page-head {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  padding: 36px 0 24px;
+  padding: 30px 0 16px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+  margin-bottom: 22px;
 }
 .page-title-wrap {
   display: flex;
@@ -649,19 +716,17 @@ watch(pageSize, (v) => {
 }
 .page-title {
   margin: 0;
-  font-size: 28px;
+  font-family: 'Noto Serif SC', 'Songti SC', var(--sa-font-sans, sans-serif);
+  font-size: 26px;
   font-weight: 700;
   color: var(--sa-text-primary);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 /* 独立徽标样式：与标题拉开层次，避免读成“浏览147” */
 .page-count {
-  font-size: 13px;
-  color: var(--sa-text-secondary);
+  font-size: 12px;
+  color: var(--sa-text-tertiary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  padding: 2px 10px;
-  border-radius: 9999px;
-  background: var(--sa-subtle);
   border: 1px solid var(--sa-border-subtle);
   line-height: 1.6;
 }
@@ -753,7 +818,7 @@ watch(pageSize, (v) => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding-bottom: 24px;
+  padding-bottom: 18px;
 }
 /* 筛选控件统一框型 = 类型下拉（.sa-select）：36px 高 / 12px 圆角 / elevated 底 /
    1px --sa-border 边框 / 13px 字 / text-primary 字色 —— 同排不再有 8px 小框与原生 select */
@@ -862,7 +927,8 @@ watch(pageSize, (v) => {
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--grid-min, 220px), 1fr));
-  gap: 20px;
+  /* 卡片去掉了外圈与内距，间距补 4px 免得封面挤在一起 */
+  gap: 24px;
 }
 .density-compact {
   --grid-min: 180px;
@@ -1098,6 +1164,609 @@ watch(pageSize, (v) => {
   .card-grid.density-standard,
   .card-grid.density-loose {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* ============================================================
+   浏览页：对照 gemini-code 样板的复刻层
+   实色控制条 + popIn 下拉 + 无遮挡 16:9 卡片；颜色全部走 --sa-* 令牌，
+   浅色主题下与样板 1:1，深色主题自动换算。
+   ============================================================ */
+.mv-container {
+  /* 与全局顶栏同一条基线：品牌烙印 left:36，右侧操作区 right:44（SaHeader.vue）。
+     不做居中限宽 —— 顶栏是通栏的，页面一旦居中就和品牌/设置对不上了。 */
+  max-width: none;
+  padding: 0 44px 72px 36px;
+}
+.browse-head {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 26px 0 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.head-left {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.browse-title {
+  margin: 0;
+  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: var(--sa-text-primary);
+}
+.count-badge {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 9999px;
+  background: var(--sa-subtle);
+  border: 1px solid var(--sa-border-subtle);
+  color: var(--sa-text-secondary);
+  white-space: nowrap;
+}
+.search-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0;
+  width: 34px;
+  justify-content: center;
+  border-radius: 9999px;
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border);
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+.search-pill.is-open {
+  width: 240px;
+  padding: 0 12px;
+  justify-content: flex-start;
+}
+.search-pill.is-open:focus-within {
+  width: 280px;
+  border-color: var(--sa-text-tertiary);
+}
+.search-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--sa-text-tertiary);
+  cursor: pointer;
+}
+.search-trigger:hover {
+  color: var(--sa-text-primary);
+}
+.search-glyph {
+  flex: none;
+  color: var(--sa-text-tertiary);
+}
+.search-pill input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--sa-text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+.search-pill input::placeholder {
+  color: var(--sa-text-tertiary);
+}
+.search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 9999px;
+  background: var(--sa-subtle);
+  color: var(--sa-text-tertiary);
+  cursor: pointer;
+}
+.search-clear:hover {
+  color: var(--sa-text-primary);
+}
+.head-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.control-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 9999px;
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.control-sep {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--sa-border-subtle);
+}
+.pop-group {
+  position: relative;
+}
+.pop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+.pop-btn:hover {
+  background: var(--sa-hover);
+  color: var(--sa-text-primary);
+}
+.pop-btn strong {
+  color: var(--sa-text-primary);
+  font-weight: 600;
+}
+.pop-btn.is-active strong {
+  color: var(--sa-accent);
+}
+.caret {
+  flex: none;
+  color: var(--sa-text-tertiary);
+  transition: transform 0.2s ease;
+}
+.pop-group.open .caret {
+  transform: rotate(180deg);
+}
+.pop-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 100;
+  display: none;
+  padding: 10px;
+  border-radius: 16px;
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border);
+  box-shadow:
+    0 12px 32px -4px rgba(0, 0, 0, 0.35),
+    0 4px 12px -2px rgba(0, 0, 0, 0.18);
+}
+.pop-group.open .pop-menu {
+  display: block;
+  animation: popIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.pop-group--right .pop-menu {
+  left: auto;
+  right: 0;
+}
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.pop-menu--type {
+  width: 320px;
+}
+.pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.pop-cap {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sa-text-tertiary);
+}
+.pop-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pop-actions .link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--sa-accent);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.pop-actions .link.muted {
+  color: var(--sa-text-tertiary);
+}
+.pop-actions .link:hover {
+  text-decoration: underline;
+}
+.pop-sep {
+  color: var(--sa-text-tertiary);
+  opacity: 0.5;
+}
+.type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--sa-text-secondary);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.type-row:hover {
+  background: var(--sa-hover);
+  color: var(--sa-text-primary);
+}
+.type-row input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--sa-accent);
+  cursor: pointer;
+}
+.type-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pop-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px 0;
+  margin-top: 8px;
+  border-top: 1px solid var(--sa-border-subtle);
+}
+.pop-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+}
+.pop-done {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--sa-text-primary);
+  color: var(--sa-bg);
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.pop-done:hover {
+  opacity: 0.85;
+}
+.pop-menu--res,
+.pop-menu--sort {
+  width: 210px;
+  padding: 6px;
+}
+.opt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.opt-row:hover {
+  background: var(--sa-hover);
+  color: var(--sa-text-primary);
+}
+.opt-row.on {
+  color: var(--sa-text-primary);
+}
+.tick {
+  color: var(--sa-accent);
+  font-weight: 700;
+  font-size: 11px;
+}
+.browse-view-switch {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 9999px;
+  background: var(--sa-subtle);
+  border: 1px solid var(--sa-border-subtle);
+}
+.browse-view-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+}
+.browse-view-btn:hover {
+  color: var(--sa-text-primary);
+}
+.browse-view-btn--active {
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(var(--grid-min, 200px), 1fr));
+  gap: 16px;
+}
+.density-compact {
+  --grid-min: 170px;
+}
+.density-standard {
+  --grid-min: 200px;
+}
+.density-loose {
+  --grid-min: 260px;
+}
+.gallery-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* 不再给每个视频套一圈：本体透明无边框无内距，封面直接落在页面底色上 */
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.gc-cover {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--sa-subtle);
+  margin-bottom: 10px;
+}
+.gc-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+.gallery-card:hover .gc-img {
+  transform: scale(1.025);
+}
+.gc-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sa-text-tertiary);
+}
+.gc-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--sa-text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition: color 0.18s ease;
+}
+.gallery-card:hover .gc-title {
+  color: var(--sa-accent);
+}
+.gc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+.gc-type {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--sa-subtle);
+  border: 1px solid var(--sa-border-subtle);
+  font-size: 10.5px;
+  color: var(--sa-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gc-nums {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sa-text-tertiary);
+  white-space: nowrap;
+}
+.gc-res {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--sa-text-secondary);
+}
+.gc-dot {
+  font-size: 7px;
+  opacity: 0.55;
+}
+@media (max-width: 1100px) {
+  /* ⚠ 不能给 .control-bar 加 overflow:auto —— 下拉面板是它的绝对定位子元素，
+     一裁就看不见。窄屏让它换行，面板照常溢出显示。 */
+  .search-pill {
+    width: 200px;
+  }
+  .control-bar {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 760px) {
+  .mv-container {
+    padding: 0 16px 56px;
+  }
+  .browse-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    padding: 18px 0 14px;
+  }
+  .browse-title {
+    font-size: 24px;
+  }
+  .head-left {
+    gap: 10px;
+  }
+  /* 移动端筛选区：搜索 + 类型 + 分辨率 + 排序 + 密度 + 视图全部压成一行，
+     横向滑动查看超出部分；控件自身绝不换行。滚动条隐藏，页面本身不产生横向溢出。 */
+  .search-pill,
+  .search-pill:focus-within {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    padding: 0;
+    justify-content: center;
+  }
+  .search-pill.is-open,
+  .search-pill.is-open:focus-within {
+    width: 168px;
+    flex-basis: 168px;
+    padding: 0 10px;
+    justify-content: flex-start;
+  }
+  .head-right {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    height: 36px;
+    padding: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .head-right::-webkit-scrollbar {
+    display: none;
+  }
+  .head-right > * {
+    flex: 0 0 auto;
+  }
+  .control-bar {
+    order: 0;
+    width: auto;
+    max-width: none;
+    height: 36px;
+    padding: 0 3px;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    border-radius: 9999px;
+  }
+  .control-bar .pop-group {
+    flex: 0 0 auto;
+  }
+  .pop-btn {
+    height: 34px;
+    padding: 0 10px;
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .control-sep {
+    flex: 0 0 1px;
+  }
+  .head-right :deep(.sa-density) {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+  }
+  .browse-view-switch {
+    height: 36px;
+    padding: 0;
+    flex: 0 0 auto;
+  }
+  .browse-view-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+  /* 下拉菜单改为视口底部的浮层：横向滚动容器会裁剪绝对定位子元素，
+     fixed 浮层既能完整显示，也不会反过来撑宽页面。 */
+  .pop-menu,
+  .pop-group--right .pop-menu {
+    position: fixed;
+    top: auto;
+    right: 16px;
+    bottom: calc(var(--sa-bottom-bar-height, 64px) + 12px);
+    left: 16px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100svh - var(--sa-bottom-bar-height, 64px) - 84px);
+    overflow-y: auto;
+  }
+  /* 手机端固定两列（与样板 grid-cols-2 一致），auto-fill 在 390 宽会退化成 1 列 */
+  .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
   }
 }
 </style>

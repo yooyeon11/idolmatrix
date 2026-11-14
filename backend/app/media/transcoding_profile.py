@@ -90,33 +90,57 @@ def quality_rung(name: str) -> QualityRung:
     return _QUALITY_BY_NAME.get(name, _QUALITY_BY_NAME["original"])
 
 
+def _align16(value: float) -> int:
+    """取最接近的 16 的倍数（下限 16）。
+
+    为什么对齐到 16 而**不是** 2：安卓 MediaCodec 按 16×16 宏块工作，
+    非对齐尺寸（实测竖屏直拍转出 1012×1918）会让不少硬解器静默回退软解 ——
+    60fps 源在平板上就变成幻灯片。对齐后 1080×2048 这类尺寸才是硬解常态。
+    """
+    return max(16, int(round(value / 16.0)) * 16)
+
+
 def resolve_target_dimensions(
     rung: QualityRung, source_width: int, source_height: int
 ) -> Tuple[int, int]:
-    """根据档位与源分辨率计算实际输出宽高（保持宽高比与**朝向**，双数对齐）。
+    """根据档位与源分辨率计算实际输出宽高（保持宽高比与**朝向**）。
 
-    ⚠ 口径 = 短边：把**短边**压到 `rung.max_height`、长边同比缩放，再用
-    `rung.max_width` 兜一次长边上限。竖屏源因此不会被按横屏包络压扁
-    （旧实现把 height 压到档位高度，竖屏 2160×3840 选 1440p 会得到 810×1440，
-    比源还小很多；短边口径下得到正确的 1440×2560）。
+    ⚠ 口径 = 短边：把**短边**压到 `rung.max_height`、长边同比缩放。
+    `rung.max_width` 只作为横屏长边的天然上限（1920/3840），**不再**用于卡竖屏。
 
-    original 档位、或源本身已在档位范围内时保持源尺寸（不缩放、不放大）。
+    旧实现（v3.9.10036 及之前）两处叠加出错：
+    1. 竖屏也套 `max_width` 兜底 → 2026×3840 选 1080p 时 scale 被压到 0.5，
+       短边只剩 1012（正确值应是 1080）；
+    2. `hw_manager` 的滤镜又带一次 `force_original_aspect_ratio=decrease`，
+       二次缩放把长边 1920 变成 1918 —— 宽高双双失去 16 对齐。
+
+    现在：短边 = 档位值，长边按比例算完**对齐到 16 的倍数**。
+    横屏 3840×2160 → 1920×1080（原值，未变）；竖屏 2026×3840 → 1080×2048。
     """
     if source_width <= 0 or source_height <= 0:
         return source_width, source_height
     if rung.name == "original" or rung.max_height <= 0:
         return source_width, source_height
+
     short = min(source_width, source_height)
     long = max(source_width, source_height)
     if short <= rung.max_height and (rung.max_width <= 0 or long <= rung.max_width):
         return source_width, source_height
-    scale = rung.max_height / short if short > rung.max_height else 1.0
-    if rung.max_width > 0 and long * scale > rung.max_width:
-        scale = min(scale, rung.max_width / long)
-    scale = min(scale, 1.0)  # 档位只降不升
-    width = max(2, int(round(source_width * scale / 2) * 2))
-    height = max(2, int(round(source_height * scale / 2) * 2))
-    return width, height
+
+    portrait = source_height > source_width
+    if portrait:
+        out_w = min(rung.max_height, short)      # 短边就是宽度
+        out_h = _align16(out_w * long / short)
+    else:
+        out_h = min(rung.max_height, short)      # 短边就是高度
+        out_w = _align16(out_h * long / short)
+        # 超宽横屏（3840×800 这类 32:9）：短边已达标但长边仍超档位上限，
+        # 必须再按 max_width 压一次，否则会输出「3840 宽的 1080p」。
+        # 竖屏不走这条 —— 竖屏的长边是高度，用 max_width 卡它正是 1012 的成因。
+        if rung.max_width > 0 and out_w > rung.max_width:
+            out_w = rung.max_width
+            out_h = _align16(out_w * short / long)
+    return int(out_w), int(out_h)
 
 
 @dataclass(frozen=True)

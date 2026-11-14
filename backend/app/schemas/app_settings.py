@@ -30,11 +30,29 @@ class IngestAiSettings(ORMModel):
     # 艺人/组合一句话简介的自定义提示词；为空时用后端内置默认
     tagline_prompt: str = ""
     # 视频中文简介（chinese_description）规则的自定义提示词；为空时用后端内置默认
-    # （默认 = 原版自由口径，见 ai_service.DEFAULT_DESC_RULE），可在 AI 设置页编辑 / 恢复默认
+    # （默认 = 原版自由口径，默认值随 ai2 子系统重建），可在 AI 设置页编辑 / 恢复默认
     desc_prompt: str = ""
+    # 提示词来源：legacy = 原来的散文式提示词（默认）；skill = 用 .dsh/skills/idolmatrix-ingest
+    # 业主口径 2026-10-18：先保留原提示词，skill 路径测试通过后再切默认
+    mode: str = "legacy"
     # 主标题（name）规范的自定义提示词；为空时用后端内置默认
-    # （默认 = 原版「YYMMDD Artist - Song [Event Name Type]」口径，见 ai_service.DEFAULT_TITLE_RULE）
+    # （默认 = 原版「YYMMDD Artist - Song [Event Name Type]」口径，默认值随 ai2 子系统重建）
     title_prompt: str = ""
+    # 仅 GET 回读：是否已保存密钥（明文不返回）
+    api_key_set: bool = False
+
+
+class Ai2Settings(ORMModel):
+    """ai2 子系统配置（任务模板共用；步骤级模型覆盖见 step_models）。"""
+    enabled: bool = False
+    provider: str = "openai-compatible"
+    base_url: str = ""
+    api_key: str = ""
+    # 默认模型（草稿组装等常规步骤）
+    model: str = ""
+    # 步骤级模型覆盖：{"verify": "deepseek-reasoner", ...}
+    # 未列出的步骤用默认 model；核验步建议配更强模型
+    step_models: dict[str, str] = {}
     # 仅 GET 回读：是否已保存密钥（明文不返回）
     api_key_set: bool = False
 
@@ -102,7 +120,9 @@ class UploaderRule(ORMModel):
     video_types: List[str] = []
     # YouTube 频道地址 / ID（@handle、/channel/UC… 链接或裸 UC ID 均可）
     youtube_channel_url: str = ""
-    # 是否启用缺失视频检测（针对部分博主 opt-in）
+    # 解析出的 YouTube 频道 ID（UC…，首次「测试」/缺失检测时回填）
+    youtube_channel_id: str = ""
+    # 是否启用缺失视频检测（针对部分博主 opt-in；绝不因填了地址/ID 自动打开）
     missing_check_enabled: bool = False
 
 
@@ -130,6 +150,8 @@ class AppearanceSettings(ORMModel):
     show_covers: bool = True
     # PC 首页刊头优先图：avatar=有头像用头像（默认）；banner=有横幅用横幅
     home_hero_image: str = "avatar"
+    # 组合详情页海报压暗档位：1=轻度（默认）2=中等 3=通透
+    group_hero_dim: int = 1
 
 
 class ExternalApiSettings(ORMModel):
@@ -142,6 +164,7 @@ class AppSettingsRead(ORMModel):
     appearance: AppearanceSettings = AppearanceSettings()
     hero: HeroSettings = HeroSettings()
     ingest_ai: IngestAiSettings = IngestAiSettings()
+    ai2: Ai2Settings = Ai2Settings()
     mtphotos: MtPhotosSettings = MtPhotosSettings()
     external_proxy: ExternalProxySettings = ExternalProxySettings()
     tmdb: TmdbSettings = TmdbSettings()
@@ -154,6 +177,7 @@ class AppSettingsPatch(ORMModel):
     appearance: Optional[AppearanceSettings] = None
     hero: Optional[HeroSettings] = None
     ingest_ai: Optional[IngestAiSettings] = None
+    ai2: Optional[Ai2Settings] = None
     mtphotos: Optional[MtPhotosSettings] = None
     external_proxy: Optional[ExternalProxySettings] = None
     tmdb: Optional[TmdbSettings] = None

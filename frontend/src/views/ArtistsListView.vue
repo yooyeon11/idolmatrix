@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import SaHeader from '@/components/SaHeader.vue'
 import SaPagination from '@/components/SaPagination.vue'
+import SaGlassSelect from '@/components/SaGlassSelect.vue'
+import SaFilterBar from '@/components/SaFilterBar.vue'
+import SaFilterSearch from '@/components/SaFilterSearch.vue'
+import type { GlassOption } from '@/components/SaGlassSelect.vue'
 import { artistsApi } from '@/api/artists'
 import type { Artist } from '@/types/models'
 import { formatDate } from '@/utils/format'
@@ -27,9 +31,22 @@ const onlyWithVideos = ref(
     return saved === null ? true : saved === '1'
   })(),
 )
-function toggleOnlyWithVideos() {
-  onlyWithVideos.value = !onlyWithVideos.value
-  localStorage.setItem(ONLY_WITH_VIDEOS_KEY, onlyWithVideos.value ? '1' : '0')
+// 流光空间玻璃下拉的选项（值仍是原来的字符串，接口参数不变）
+const sortOptions: GlassOption[] = [
+  { label: '默认排序', value: 'default' },
+  { label: '姓名 A→Z', value: 'name' },
+  { label: '姓名 Z→A', value: '-name' },
+]
+const rangeOptions: GlassOption[] = [
+  { label: '仅有关联视频', value: 'videos', hint: '推荐' },
+  { label: '显示全部', value: 'all' },
+]
+const rangeValue = computed(() => (onlyWithVideos.value ? 'videos' : 'all'))
+function onRangeChange(v: string | number | null) {
+  const next = v === 'videos'
+  if (next === onlyWithVideos.value) return
+  onlyWithVideos.value = next
+  localStorage.setItem(ONLY_WITH_VIDEOS_KEY, next ? '1' : '0')
   load(1)
 }
 
@@ -39,9 +56,11 @@ const artistSort = ref<'default' | 'name' | '-name'>(
   (localStorage.getItem(ARTISTS_SORT_KEY) as 'default' | 'name' | '-name') || 'default',
 )
 
-function onSortChange(e: Event) {
-  artistSort.value = (e.target as HTMLSelectElement).value as 'default' | 'name' | '-name'
-  localStorage.setItem(ARTISTS_SORT_KEY, artistSort.value)
+function onSortPick(v: string | number | null) {
+  const next = (v || 'default') as 'default' | 'name' | '-name'
+  if (next === artistSort.value) return
+  artistSort.value = next
+  localStorage.setItem(ARTISTS_SORT_KEY, next)
   load(1)
 }
 
@@ -63,18 +82,36 @@ function initialOf(name?: string | null) {
 function displayName(a: Artist) {
   return a.chinese_name || a.stage_name || a.name || `#${a.id}`
 }
-function displaySub(a: Artist) {
-  const parts: string[] = []
-  if (a.stage_name && a.stage_name !== displayName(a)) parts.push(a.stage_name)
-  if (a.debut_date) {
-    const d = formatDate(a.debut_date)
-    if (d !== '--') parts.push(`${d} 出道`)
-  }
-  return parts.join(' · ')
+/** 斜体拉丁名（跟在大字下面那一行） */
+function latinOf(a: Artist) {
+  const latin = a.english_name || a.stage_name || a.name || ''
+  return latin && latin !== displayName(a) ? latin : ''
 }
-function avatarSrc(a: Artist) {
-  // w=256 + 去掉 ?t= 时间戳：理由同 GroupsListView.avatarSrc（原图直出 + 缓存击穿）
-  return a.avatar_path ? `${artistsApi.avatarUrl(a.id)}?w=256` : ''
+function debutLabel(a: Artist) {
+  if (!a.debut_date) return ''
+  const d = formatDate(a.debut_date)
+  return d === '--' ? '' : d
+}
+function portraitSrc(a: Artist) {
+  // 3:4 竖幅立绘：卡宽约 240px，480 覆盖 2x DPR。
+  // v=updated_at 作为版本号：换头像/裁切后 updated_at 变化，URL 随之改变，
+  // 不会再被浏览器/CDN 的旧缓存顶住（值稳定时仍能命中缓存）。
+  return a.avatar_path
+    ? `${artistsApi.avatarUrl(a.id)}?w=480&v=${encodeURIComponent(a.updated_at || '')}`
+    : ''
+}
+const brokenCovers = ref<Set<number>>(new Set())
+function onCoverError(id: number) {
+  brokenCovers.value = new Set(brokenCovers.value).add(id)
+}
+function hasCover(a: Artist) {
+  return !!portraitSrc(a) && !brokenCovers.value.has(a.id)
+}
+function bioOf(a: Artist) {
+  return (a.tagline || a.description || '').replace(/\{BR\}/g, ' ').trim()
+}
+function roleOf(a: Artist) {
+  return a.occupation || (a.gender === 'Female' ? '女艺人' : a.gender === 'Male' ? '男艺人' : '艺人')
 }
 
 async function load(targetPage: number) {
@@ -117,67 +154,79 @@ onMounted(() => load(1))
 </script>
 
 <template>
-  <div class="mv-page">
-    <SaHeader>
-    </SaHeader>
-    <div class="mv-container">
-      <div class="page-head">
-        <div class="page-title-wrap">
-          <h1 class="page-title">艺人</h1>
-          <span class="page-count">{{ total }}</span>
+  <div class="ap-page">
+    <SaHeader />
+    <div class="ap-wrap">
+      <header class="ap-head">
+        <div class="ap-title-wrap">
+          <h1 class="ap-title">艺人画廊</h1>
+          <span class="ap-count">{{ total }}</span>
         </div>
-        <div class="head-actions">
-          <button
-            class="filter-toggle"
-            :class="{ active: onlyWithVideos }"
-            type="button"
-            title="隐藏未关联任何视频的艺人（如 AI 分析组合时自动生成的成员）"
-            @click="toggleOnlyWithVideos"
-          >
-            {{ onlyWithVideos ? '仅有关联视频' : '显示全部艺人' }}
-          </button>
-          <select
-            class="sort-select"
-            :value="artistSort"
-            @change="onSortChange"
-          >
-            <option value="default">默认排序</option>
-            <option value="name">姓名 A→Z</option>
-            <option value="-name">姓名 Z→A</option>
-          </select>
-          <input
-            v-model="searchInput"
-            class="search-input"
-            type="text"
-            placeholder="搜索艺人名称…"
+        <SaFilterBar class="ap-actions">
+          <SaGlassSelect
+            :model-value="rangeValue"
+            :options="rangeOptions"
+            prefix="范围"
+            width="12rem"
+            aria-label="筛选范围"
+            @update:model-value="onRangeChange"
           />
-        </div>
-      </div>
+          <span class="sa-fb-sep" />
+          <SaGlassSelect
+            :model-value="artistSort"
+            :options="sortOptions"
+            prefix="排序"
+            align="right"
+            width="12rem"
+            aria-label="排序方式"
+            @update:model-value="onSortPick"
+          />
+          <span class="sa-fb-sep" />
+          <SaFilterSearch v-model="searchInput" placeholder="艺人 / 韩文…" aria-label="检索艺人" />
+        </SaFilterBar>
+      </header>
 
-      <div v-if="loading && !items.length" class="list-loading">加载中…</div>
+      <div v-if="loading && !items.length" class="ap-loading">加载中…</div>
 
       <template v-else-if="items.length">
-        <div class="card-grid">
-          <button
-            v-for="a in items"
+        <!-- 方案 I 艺人视图：3:4 竖幅黄金立绘墙 -->
+        <div class="ap-gallery">
+          <article
+            v-for="(a, i) in items"
             :key="a.id"
-            class="card"
+            class="ac"
+            :style="{ animationDelay: `${i * 35}ms` }"
             @click="goArtist(a)"
           >
-            <div class="card-avatar" :style="avatarStyle(a.id)">
+            <div class="ac-frame">
               <img
-                v-if="avatarSrc(a)"
-                class="card-avatar-img"
-                :src="avatarSrc(a)"
+                v-if="hasCover(a)"
+                class="ac-img"
+                :src="portraitSrc(a)"
                 alt=""
+                loading="lazy"
+                @error="onCoverError(a.id)"
               />
-              <template v-else>{{ initialOf(displayName(a)) }}</template>
+              <div v-else class="ac-fallback" :style="avatarStyle(a.id)">
+                {{ initialOf(displayName(a)) }}
+              </div>
+              <div class="ac-shade" aria-hidden="true" />
+
+              <!-- 悬停从底部滑出的一句话短评 -->
+              <div class="ac-drawer">
+                <div class="ac-role">{{ roleOf(a) }}</div>
+                <p class="ac-bio">{{ bioOf(a) || '暂无简介' }}</p>
+              </div>
             </div>
-            <div class="card-info">
-              <div class="card-name">{{ displayName(a) }}</div>
-              <div class="card-meta">{{ displaySub(a) || '艺人' }}</div>
+
+            <div class="ac-foot">
+              <div class="ac-names">
+                <h3 class="ac-name">{{ displayName(a) }}</h3>
+                <div v-if="latinOf(a)" class="ac-en">{{ latinOf(a) }}</div>
+              </div>
+              <span v-if="debutLabel(a)" class="ac-debut">{{ debutLabel(a) }}</span>
             </div>
-          </button>
+          </article>
         </div>
 
         <SaPagination
@@ -191,8 +240,8 @@ onMounted(() => load(1))
         />
       </template>
 
-      <div v-else class="empty-state">
-        <PersonOutlined :size="40" />
+      <div v-else class="ap-empty">
+        <PersonOutlined :size="36" />
         <p>没有找到艺人</p>
       </div>
     </div>
@@ -200,211 +249,263 @@ onMounted(() => load(1))
 </template>
 
 <style scoped>
-.mv-page {
+.ap-page {
   min-height: 100vh;
+  background: var(--sa-bg);
+  color: var(--sa-text-primary);
 }
-.mv-container {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 0 32px 64px;
-}
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 36px 0 28px;
-}
-.page-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.page-title {
+.ap-wrap {
+  /* 不居中：左边缘与顶栏品牌 idolmatrix 的 i 同一竖线（任意屏宽） */
+  max-width: none;
   margin: 0;
-  font-size: 28px;
+  padding: 0 var(--sa-gutter, 36px) 72px;
+}
+
+/* ===== 刊头 ===== */
+.ap-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px 20px;
+  padding: 30px 0 16px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+  margin-bottom: 30px;
+}
+.ap-title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.ap-title {
+  margin: 0;
+  font-family: 'Noto Serif SC', 'Songti SC', var(--sa-font-sans, sans-serif);
+  font-size: 26px;
   font-weight: 700;
-  color: var(--sa-text-primary);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
-/* 独立徽标样式：与标题拉开层次，避免读成“标题+数字”粘在一起 */
-.page-count {
-  font-size: 13px;
-  color: var(--sa-text-secondary);
+.ap-count {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  padding: 2px 10px;
-  border-radius: 9999px;
-  background: var(--sa-subtle);
-  border: 1px solid var(--sa-border-subtle);
-  line-height: 1.6;
-}
-.head-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.sort-select {
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 8px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-}
-.head-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.filter-toggle {
-  padding: 8px 14px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 9999px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-tertiary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-.filter-toggle:hover {
-  border-color: var(--sa-border);
-  color: var(--sa-text-secondary);
-}
-.filter-toggle.active {
-  border-color: var(--sa-text-primary);
-  color: var(--sa-text-primary);
-  background: var(--sa-elevated);
-}
-.search-input {
-  width: 240px;
-  padding: 9px 16px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 9999px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-.search-input:focus {
-  border-color: var(--sa-accent);
-}
-.search-input::placeholder {
+  font-size: 12px;
   color: var(--sa-text-tertiary);
 }
 
-.list-loading {
-  padding: 60px 0;
-  text-align: center;
-  color: var(--sa-text-tertiary);
-  font-size: 14px;
-}
-
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 20px;
-}
-.card {
+.ap-loading,
+.ap-empty {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 16px;
-  background: var(--sa-elevated);
-  padding: 14px;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.2s, transform 0.2s;
-}
-.card:hover {
-  border-color: var(--sa-accent);
-  transform: translateY(-2px);
-}
-.card-avatar {
-  width: 100%;
-  aspect-ratio: 1;
-  border-radius: 12px;
-  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
-  font-weight: 700;
-  color: #fff;
-  overflow: hidden;
+  gap: 10px;
+  padding: 90px 0;
+  color: var(--sa-text-tertiary);
+  font-size: 13px;
 }
-.card-avatar-img {
+
+/* ===== 立绘墙：3:4 竖幅 ===== */
+.ap-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 26px 16px;
+}
+@media (min-width: 640px) {
+  .ap-gallery {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 30px 20px;
+  }
+}
+@media (min-width: 1024px) {
+  .ap-gallery {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 34px 24px;
+  }
+}
+@media (min-width: 1360px) {
+  .ap-gallery {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1700px) {
+  .ap-gallery {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+.ac {
+  cursor: pointer;
+  opacity: 0;
+  animation: acReveal 0.55s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+@keyframes acReveal {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ac-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--sa-text-tertiary);
+}
+.ac-code {
+  color: var(--sa-accent);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.ac-tag {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ac-frame {
+  position: relative;
+  aspect-ratio: 3 / 4.1;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border-subtle);
+  transition:
+    transform 0.6s var(--spring, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 0.35s ease,
+    box-shadow 0.6s var(--spring, cubic-bezier(0.16, 1, 0.3, 1));
+}
+.ac:hover .ac-frame {
+  transform: translateY(-6px);
+  border-color: color-mix(in oklab, var(--sa-text-primary) 38%, transparent);
+  box-shadow: 0 26px 55px -12px rgba(0, 0, 0, 0.55);
+}
+.ac-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 0.95s cubic-bezier(0.19, 1, 0.22, 1);
 }
-.card-info {
-  margin-top: 12px;
+.ac:hover .ac-img {
+  transform: scale(1.05);
+}
+.ac-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 44px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+}
+.ac-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, transparent 52%);
+  pointer-events: none;
+}
+.ac-cams {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  color: #6ee7b7;
+}
+
+/* 悬停抽屉 */
+.ac-drawer {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 10px 12px 12px;
+  background: rgba(13, 14, 20, 0.95);
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(14px);
+  transform: translateY(101%);
+  transition: transform 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.ac:hover .ac-drawer {
+  transform: translateY(0);
+}
+.ac-role {
+  margin-bottom: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: #c4b5fd;
+}
+.ac-bio {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.88);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ac-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 2px;
+}
+.ac-names {
   min-width: 0;
 }
-.card-name {
+.ac-name {
+  margin: 0;
+  font-family: 'Noto Serif SC', 'Songti SC', 'Playfair Display', serif;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--sa-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.3s ease;
 }
-.card-meta {
-  margin-top: 4px;
-  font-size: 12px;
+.ac:hover .ac-name {
+  color: var(--sa-accent);
+}
+.ac-en {
+  margin-top: 2px;
+  font-family: 'Instrument Serif', 'Playfair Display', serif;
+  font-style: italic;
+  font-size: 12.5px;
   color: var(--sa-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 80px 0;
+.ac-debut {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
   color: var(--sa-text-tertiary);
-}
-.empty-state p {
-  margin: 0;
-  font-size: 14px;
 }
 
 @media (max-width: 640px) {
-  .mv-container {
+  .ap-wrap {
     padding: 0 16px 48px;
   }
-  .page-head {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 12px;
-  }
-  .search-input {
-    width: 100%;
-  }
-  .card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .card {
-    padding: 10px;
-    min-width: 0;
-  }
-  .card-avatar {
-    font-size: 28px;
-  }
-  .card-name {
-    font-size: 14px;
-  }
-  .card-meta {
-    font-size: 11px;
+  .ac-frame {
+    border-radius: 16px;
   }
 }
 </style>

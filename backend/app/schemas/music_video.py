@@ -12,6 +12,7 @@ from app.schemas.artist import ArtistBrief
 from app.schemas.common import EntityReadMixin, ORMModel
 from app.schemas.group import GroupBrief
 from app.schemas.song import SongBrief
+from app.schemas.video_publish import VideoPublishRead
 
 
 class _SourceKeyNorm(ORMModel):
@@ -67,6 +68,10 @@ class MusicVideoBase(_SourceKeyNorm):
 
     event_name: Optional[str] = None
     performance_date: Optional[date] = None
+    # 机位：规范值见 app/core/vocab.py；NULL = 未标注（画幅由 width/height 派生）
+    camera_angle: Optional[str] = None
+    # 场次标签「YYMMDD - 活动名」；为空时入库会按 performance_date + event_name 自动生成
+    session_label: Optional[str] = None
     # 是否短视频：未显式标记时按 video_types 是否含 ShortVideo 自动派生（与时长无关，v3.2.32）
     is_short: Optional[bool] = None
     # 是否为 solo 表演（表演者为独立艺人而非组合表演），AI 辅助判断，供自动整理入库使用
@@ -78,6 +83,8 @@ class MusicVideoBase(_SourceKeyNorm):
     source_id: Optional[str] = None
     source_url: Optional[str] = None
     original_uploader: Optional[str] = None
+    # YouTube 频道稳定身份（UC…）；改名后仍可归组
+    source_channel_id: Optional[str] = None
 
     # 技术字段：通常由程序写入，但允许更新
     duration: Optional[int] = None
@@ -119,6 +126,8 @@ class MusicVideoUpdate(_SourceKeyNorm):
     participants: Optional[List[dict]] = None
     event_name: Optional[str] = None
     performance_date: Optional[date] = None
+    camera_angle: Optional[str] = None
+    session_label: Optional[str] = None
     is_short: Optional[bool] = None
     is_solo: Optional[bool] = None
     release_date: Optional[date] = None
@@ -127,6 +136,7 @@ class MusicVideoUpdate(_SourceKeyNorm):
     source_id: Optional[str] = None
     source_url: Optional[str] = None
     original_uploader: Optional[str] = None
+    source_channel_id: Optional[str] = None
     external_links: Optional[List[Any]] = None
     description: Optional[str] = None
     chinese_description: Optional[str] = None
@@ -158,6 +168,8 @@ class MusicVideoRead(MusicVideoBase, EntityReadMixin):
     tracks: List[MusicVideoTrackRead] = []
     # 翻唱原唱展示名：由曲目歌曲主唱/发行主体推导，不写入、不建关联
     cover_from: List[str] = []
+    # B 站分发记录（P0：只有详情接口填充；列表接口保持 None 以避免 N+1）
+    publish: Optional[VideoPublishRead] = None
 
 
 class MusicVideoBrief(EntityReadMixin):
@@ -184,6 +196,33 @@ class MusicVideoBrief(EntityReadMixin):
     subject_artist_chinese_name: Optional[str] = None
     performance_date: Optional[date] = None
     release_date: Optional[date] = None
+    # 机位 / 场次（列表卡与筛选器用）
+    camera_angle: Optional[str] = None
+    session_label: Optional[str] = None
+
+
+class MusicVideoRelatedWork(ORMModel):
+    """右栏相关作品：视频卡片 + 推荐来源（同曲 / 同组合 / 同公司 / 同场活动）。"""
+
+    video: MusicVideoBrief
+    reason: str
+
+
+class MusicVideoRelatedArtist(ORMModel):
+    """右栏相关艺人/组合：可点进艺人页，带推荐来源。"""
+
+    kind: str  # artist | group
+    id: int
+    uid: Optional[str] = None
+    name: str
+    chinese_name: Optional[str] = None
+    avatar_path: Optional[str] = None
+    reason: str
+
+
+class MusicVideoRelated(ORMModel):
+    works: List[MusicVideoRelatedWork] = []
+    artists: List[MusicVideoRelatedArtist] = []
 
 
 class DeleteScannedRequest(ORMModel):
@@ -502,10 +541,78 @@ class ResolutionFacetResponse(ORMModel):
     items: List[ResolutionFacet] = []
 
 
+class ValueFacet(ORMModel):
+    """通用「取值 → 条数」项（机位 / 场次筛选菜单用）。"""
+
+    key: str
+    count: int
+    # 机位的中文展示名 / 场次的额外提示；无则为空
+    label: Optional[str] = None
+
+
+class ValueFacetResponse(ORMModel):
+    """机位 / 场次筛选菜单数据源：只返回有条数的取值。"""
+
+    items: List[ValueFacet] = []
+
+
 class IncomingInfoRequest(ORMModel):
     """读取待整理文件 info.json 的请求。"""
 
     file_path: str
+
+
+class StageMatrixMember(ORMModel):
+    """矩阵成员行：source 记录判定来源，confidence 供前端降级展示。"""
+
+    kind: str  # artist | group
+    id: Optional[int] = None
+    uid: Optional[str] = None
+    name: str
+    avatar_path: Optional[str] = None
+    source: str  # subject_artist | video_artists | participants | group
+    confidence: str  # high | medium | low
+
+
+class StageMatrixItem(ORMModel):
+    id: int
+    uid: str
+    name: str
+    duration: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    orientation: str  # landscape | portrait | unknown
+    camera: str  # facecam | mv | landscape_fancam | portrait_fancam | stage | onetake | other
+    video_types: List[str] = []
+    member: StageMatrixMember
+    current: bool = False
+
+
+class StageMatrixDay(ORMModel):
+    date: Optional[date] = None  # None = 未标注日期组
+    videos: List[StageMatrixItem] = []
+
+
+class StageMatrixSong(ORMModel):
+    id: int
+    name: str
+    chinese_name: Optional[str] = None
+
+
+class StageMatrixGroup(ORMModel):
+    id: int
+    uid: str
+    name: str
+    avatar_path: Optional[str] = None
+
+
+class StageMatrixRead(ORMModel):
+    """打歌期三维矩阵响应：available=False 时前端隐藏矩阵舱。"""
+
+    available: bool
+    song: Optional[StageMatrixSong] = None
+    group: Optional[StageMatrixGroup] = None
+    days: List[StageMatrixDay] = []
 
 
 class IncomingInfoItem(ORMModel):
@@ -519,6 +626,7 @@ class IncomingInfoItem(ORMModel):
     uploader: Optional[str] = None
     uploader_id: Optional[str] = None
     channel: Optional[str] = None
+    channel_id: Optional[str] = None
     upload_date: Optional[str] = None
     timestamp: Optional[int] = None
     description: Optional[str] = None

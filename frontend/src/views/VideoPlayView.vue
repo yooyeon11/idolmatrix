@@ -1,5 +1,9 @@
+<script lang="ts">
+export default { name: 'VideoPlayView' }
+</script>
+
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   NButton,
@@ -14,11 +18,15 @@ import {
   useMessage,
 } from 'naive-ui'
 import VideoPlayer from '@/components/VideoPlayer.vue'
+import { nativeCapabilities } from '@/native/android'
 import SaHeader from '@/components/SaHeader.vue'
 import SaSelect from '@/components/SaSelect.vue'
 import type { SaOption } from '@/components/SaSelect.vue'
 import VideoTrackList from '@/components/VideoTrackList.vue'
 import type { TrackRow } from '@/components/VideoTrackList.vue'
+import StageMatrixDock from '@/components/StageMatrixDock.vue'
+import VideoInfoDock from '@/components/VideoInfoDock.vue'
+import ChapterSegmentBar from '@/components/ChapterSegmentBar.vue'
 import { albumsApi } from '@/api/albums'
 import { artistsApi } from '@/api/artists'
 import { groupsApi } from '@/api/groups'
@@ -32,14 +40,17 @@ import type {
   GroupBrief,
   MusicVideo,
   MusicVideoBrief,
+  MusicVideoRelated,
+  MusicVideoRelatedArtist,
   PlaybackSession,
   SongBrief,
+  StageMatrix,
   VideoScore,
   VideoChapter,
   VideoPathSuggestion,
   VideoType,
 } from '@/types/models'
-import { QUALITY_LABEL, VIDEO_TYPE_OPTIONS, VIDEO_TYPE_LABEL } from '@/types/models'
+import { CAMERA_ANGLE_OPTIONS, QUALITY_LABEL, VIDEO_TYPE_OPTIONS, VIDEO_TYPE_LABEL } from '@/types/models'
 import {
   PlayArrowOutlined,
   EditOutlined,
@@ -54,8 +65,8 @@ import VideoCollectPicker from '@/components/VideoCollectPicker.vue'
 import CoverFramePicker from '@/components/CoverFramePicker.vue'
 import FolderPickerModal from '@/components/FolderPickerModal.vue'
 import { videoCollectionsApi } from '@/api/videoCollections'
-import { formatDuration, formatFileSize, formatResolution, formatDate, formatBitrate } from '@/utils/format'
-import { artistPath, fetchByRouteParam, groupPath, songPath, videoPath } from '@/utils/routes'
+import { formatDuration } from '@/utils/format'
+import { artistPath, fetchByRouteParam, groupPath, videoPath } from '@/utils/routes'
 import { IMG_W_FULL, IMG_W_THUMB } from '@/utils/imageSizes'
 import { RESOLUTION_TIERS } from '@/utils/resolution'
 import { useSettingsStore } from '@/stores/settings'
@@ -107,13 +118,39 @@ function sleep(ms: number) {
 
 // 加载序列号：丢弃过期的异步回调（快速切换路由时旧请求不应覆盖新数据）
 let loadSeq = 0
-// 是否曾经开始过播放：一旦为 true，「待播放」大遮罩（hero-overlay）永不再出现，
+// 是否曾经开始过播放：一旦为 true，预播唤出（悬停/单击显示菜单栏）不再生效，
 // seek 跳转中只显示「正在跳转…」缓冲提示，不会掉回待播放再从头播
 const hasEverPlayed = ref(false)
 const brokenThumbs = ref<Set<number>>(new Set())
 const brokenRelatedThumbs = ref<Set<number>>(new Set())
 const related = ref<MusicVideoBrief[]>([])
-const showOriginal = ref(false)
+/** 右栏相关艺人/组合（同组合成员、同公司，可点进艺人页） */
+const relatedPeople = ref<MusicVideoRelatedArtist[]>([])
+
+/** 窄屏判定：相关作品 PC 显示 10 条、手机 5 条 */
+const isNarrow = ref(false)
+let narrowMq: MediaQueryList | null = null
+function syncNarrow(e: { matches: boolean }) {
+  isNarrow.value = e.matches
+}
+/** 相关作品：PC 前 10 条，手机前 5 条（保持服务端给的顺序，通常是最相关的） */
+const relatedShown = computed(() => related.value.slice(0, isNarrow.value ? 5 : 10))
+/** 相关艺人：随机最多 5 个（每次载入重排一次，避免每次滚动都变） */
+const peopleShown = ref<MusicVideoRelatedArtist[]>([])
+watch(
+  relatedPeople,
+  (list) => {
+    const arr = [...list]
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const t = arr[i]
+      arr[i] = arr[j]
+      arr[j] = t
+    }
+    peopleShown.value = arr.slice(0, 5)
+  },
+  { immediate: true },
+)
 const collectOpen = ref(false)
 const savedCollectionIds = ref<number[]>([])
 
@@ -150,6 +187,120 @@ function jumpToChapter(time: number) {
   void startPlayAt(time)
 }
 
+// ===== 打歌期三维矩阵（右侧「打歌场次 & 机位切换」舱） =====
+const stageMatrix = ref<StageMatrix | null>(null)
+
+// ===== 移动端设计稿（2026-11-13）：标题卡 + 双分段 Pager =====
+/** 只在 ≤768px 生效；桌面保持原来的「左档案 + 右场次」两栏 */
+const mobileSegment = ref<'cams' | 'archive'>('cams')
+const mobileActor = computed(() => relatedArtists.value[0] || null)
+let mTouchX = 0
+let mTouchY = 0
+let mTouchIgnore = false
+function onMobileTouchStart(e: TouchEvent) {
+  const t = e.touches[0]
+  mTouchX = t?.clientX ?? 0
+  mTouchY = t?.clientY ?? 0
+  // 场次机位舱里有自己的横滑内容（场次下拉、机位列表、相册墙），
+  // 从这些区域开始的触摸不参与换页，否则会抢手势导致操作卡顿。
+  mTouchIgnore = !!(e.target as Element | null)?.closest?.(
+    '.dock-shell, .rail-extra, .v-m-header, .a-m-works',
+  )
+}
+function onMobileTouchEnd(e: TouchEvent) {
+  if (mTouchIgnore) return
+  const t = e.changedTouches[0]
+  if (!t) return
+  const dx = t.clientX - mTouchX
+  const dy = t.clientY - mTouchY
+  // 只在明确横滑时切页，避免和竖向滚动抢手势
+  if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return
+  mobileSegment.value = dx < 0 ? 'archive' : 'cams'
+}
+
+/**
+ * 右舱「波浪入场」开关。
+ * - 首次进入 / 切 Tab：播一次（700ms 后自动关掉）
+ * - 切场次/机位：**不播** —— 每次切换 11~13 张卡重放动画，正是「切起来一顿一顿」的来源
+ */
+const dockWave = ref(true)
+let dockWaveTimer: number | null = null
+function flashDockWave(ms = 700) {
+  dockWave.value = false
+  void nextTick(() => {
+    dockWave.value = true
+  })
+  if (dockWaveTimer !== null) window.clearTimeout(dockWaveTimer)
+  dockWaveTimer = window.setTimeout(() => {
+    dockWave.value = false
+  }, ms)
+}
+// 档案已下沉到播放器下方，右舱只剩场次与机位：
+// 首次进入播一次波浪入场，随后关掉；切场次/机位不再重放（重放会一顿一顿）。
+onMounted(() => flashDockWave(900))
+
+/**
+ * 打歌期矩阵缓存：按 **song_id** 存。
+ *
+ * 同一首歌的所有机位/场次拿到的矩阵几乎一样（服务端按 ±45 天窗口取同曲候选），
+ * 每次切换都重拉其实是在浪费一次往返。命中条件：缓存的候选里确实包含目标视频，
+ * 否则（跨窗口/换歌）照常重拉，保证不会拿错数据。
+ */
+const stageMatrixCache = new Map<number, StageMatrix>()
+async function loadStageMatrix(videoId: number) {
+  const songId = video.value?.song_id ?? null
+  if (songId) {
+    const hit = stageMatrixCache.get(songId)
+    if (hit) {
+      const present = (hit.days || []).some((d) => (d.videos || []).some((v) => v.id === videoId))
+      if (present) {
+        // 复用缓存：只把 current 标记挪到当前视频
+        stageMatrix.value = {
+          ...hit,
+          days: hit.days.map((d) => ({
+            ...d,
+            videos: d.videos.map((v) => ({ ...v, current: v.id === videoId })),
+          })),
+        }
+        return
+      }
+    }
+  }
+  try {
+    const res = await musicVideosApi.stageMatrix(videoId)
+    stageMatrix.value = res
+    if (songId && res?.available) stageMatrixCache.set(songId, res)
+  } catch {
+    stageMatrix.value = null
+  }
+}
+
+// 矩阵内切换 = 普通路由跳转（videos/:uid 复用本组件），接力逻辑在路由 watch 里统一处理
+function onStageSelect(uid: string) {
+  if (!uid || uid === routeKey.value) return
+  router.push(videoPath(uid))
+}
+
+// mm:ss（章节提示用）
+function formatClock(sec?: number | null): string {
+  const s = Math.max(0, Math.floor(Number(sec) || 0))
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+}
+
+// 当前章节名（分段条上方提示行）
+const activeChapterTitle = computed(() => {
+  const list = chapters.value
+  const t = lastKnownTime.value
+  if (!list.length) return ''
+  let title = ''
+  for (const c of list) {
+    if (c.time <= t) title = c.title
+    else break
+  }
+  return title
+})
+
+// 右舱底部关联标签的日期指示器
 const scoreOpen = ref(false)
 const scoring = ref(false)
 const scoreResult = ref<VideoScore | null>(null)
@@ -214,14 +365,14 @@ async function runScore() {
   }
 }
 
-// 换视频:重置评分状态并拉取该视频的最近评分(按钮圆环直接显示)
+// 换视频:重置评分状态。评分改为**懒加载** —— 只有真的打开评分面板才拉
+// （以前每次切换都无条件打一发 ai-score，只为按钮上的小圆环）
 watch(
   () => video.value?.id,
-  (id) => {
+  () => {
     scoreResult.value = null
     scoreLoadedOnce.value = false
     scoreError.value = ''
-    if (id) void loadLatestScore()
   },
 )
 
@@ -244,31 +395,51 @@ async function loadVideoMemberships(videoId: number) {
 // 触屏/移动设备上「用系统播放器打开」无意义（后端打开的是服务端文件，手机上看不到），隐藏入口
 const isMobile = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini|HarmonyOS/i.test(navigator.userAgent || '')
 
-// 手机窄屏：竖屏片点播放后用页面内竖屏播放器（不是全屏），暂停再回到 16:9
-const phoneViewport = ref(
-  typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches,
-)
+// 播放器画框**固定 16:9 横向**，不随片源比例变形。
+// 竖屏直拍（1080×1920）也放进同一个横向画框里，画面 contain 居中、左右留黑边 ——
+// 之前「竖屏片自动变成竖着的播放器」会让整页高度来回跳、切场次时机位矩阵被推走。
 const mediaPaused = ref(true)
-const isPortraitSource = computed(() => {
-  const w = video.value?.width
-  const h = video.value?.height
-  return !!w && !!h && h > w
-})
-// 手机窄屏 + 竖屏片：用「限高黑框」承载（B 站式，画面 contain 居中、左右留黑边）。
-// ⚠ 刻意**不联动播放状态**。旧实现是 `playing && !mediaPaused.value`，结果：
-//   点播放 / 暂停 / 切画质 / 拖进度（转码换源会先 pause 再 play）时，盒子在 16:9 与片源比例
-//   之间来回切换 —— 实测 390×844 待播 219px → 播放 636px，单次跳变 417px，整页高度跟着变
-//   216px，下方内容被整体推走，就是「竖屏页不稳定」的根因。盒子尺寸只该由「是不是竖屏片」决定。
-//   盒子高度是固定值（58svh，见样式），不再需要把片源比例传进 CSS。
-const portraitBox = computed(
-  () => isMobile && phoneViewport.value && isPortraitSource.value,
-)
+// 「本次换源是否续播」= 用户最近一次真实 play/pause 意图。
+// `playing` 只代表页面已进入播放模式（暂停时仍为 true），不能拿它判断是否续播。
+const shouldAutoPlay = ref(true)
 
 function onPlayerPlay() {
   mediaPaused.value = false
+  shouldAutoPlay.value = true
 }
 function onPlayerPause() {
   mediaPaused.value = true
+  shouldAutoPlay.value = false
+}
+
+/**
+ * 全屏已交给原生播放器：停掉窗口态会话并回到封面态。
+ *
+ * 不停的话服务端会同时跑两路（一路给暂停的网页、一路给原生），
+ * 转码片源在低功耗 NAS 上直接顶不住。退出全屏后点播放，从交出去的进度续。
+ */
+function onNativeHandoff(position: number) {
+  lastKnownTime.value = Math.max(0, position)
+  playing.value = false
+  playerArmed.value = false
+  // 交接后回到「封面」态；hasEverPlayed 置回 false，
+  // 否则 onHeroTap 会因为「播过一次」提前 return，点了没反应
+  hasEverPlayed.value = false
+  mediaPaused.value = true
+  shouldAutoPlay.value = false
+  const sid = session.value?.session_id
+  session.value = null
+  stopHeartbeat()
+  stopWindowPoll()
+  if (sid) void stopSession(sid)
+}
+
+/** 原生播放器退出：只记进度，不自动播放（用户可能只是退出全屏）。 */
+function onNativePlayerClosed(position: number, ended: boolean) {
+  if (position > 0) lastKnownTime.value = position
+  // 退出全屏后直接把控制栏亮出来，一次点击就能从原位置继续
+  playerArmed.value = true
+  void ended
 }
 
 const routeKey = computed(() => String(route.params.uid || ''))
@@ -331,13 +502,18 @@ let originalDecodeFailed = false
 // 用户感知就是「总是提示无法原画播放」。浏览器没有 API 能查询自身硬解能力，
 // 服务端也无法预判 —— 所以按「视频编码 + 分辨率档」记住实际失败（30 天），
 // 同类片进入页面默认直接选转码档位；原画仍可手动选。
-// v3.4.9 键升版：v1 条目全部写于「AV1/VP9 直出被 xgplayer-hls 兜底 avc1 打挂」的年代，
+// v3.4.9 键升版：v1 条目全部写于「AV1/VP9 直出被旧 HLS 内核兜底 avc1 打挂」的年代，
 // 直出修复后那些「失败」不再是真实能力边界 —— 整体作废重来，避免同类片被旧记忆
 // 无谓地压到转码档。
 // v3.5.0：HLS 内核换 hls.js，AV1/VP9 可直出，真实失败大幅减少；记忆 TTL 收紧到 7 天，
 // 只对「原画直出 + 非转码」情形下的解码失败标记（见 onPlayerState），避免陈旧误判
 // 长时间把同类片压到转码档。原画始终可手动选（弹窗提供「仍尝试原画」）。
-const ORIG_FAIL_KEY = 'kpml_origfail_classes_v2'
+// ★ v3：v2 时期把「transcode + original」误判成「原画失败」，凡是 MKV 源
+// （即几乎所有本地库）都被记了失败，7 天内默认压到转码档 —— 表现为
+// 「点原画播出来是 720P」。升级 key 让这批陈旧误判一次性作废。
+// ★ v4→v5：旧逻辑把网络错误/切片超时也记成「原画解码失败」，这类污染条目
+// 会让同类片 7 天内无端绕开原画；升级 key 一次性清掉，之后只记 code 3/4。
+const ORIG_FAIL_KEY = 'kpml_origfail_classes_v5'
 const ORIG_FAIL_TTL_MS = 7 * 24 * 3600 * 1000
 
 function origFailClassKey(v: MusicVideo | null): string {
@@ -459,7 +635,8 @@ async function fallbackTranscodePlay(
   }
   userPickedQuality.value = true
   activeQuality.value = q
-  message.warning(detail.replace(/^Transcode[：:]\s*/, '') || '原画无法直出，已自动转码播放。')
+  // 不再弹 toast：这条信息（为什么转码）改由播放器左上角的常驻徽标承载，
+  // 悬停可看完整原因 —— toast 3 秒就消失，长句根本来不及读。
   try {
     const next = await createSessionWithRetry(q, resumeAt)
     if (seq !== seekSeq) {
@@ -490,18 +667,139 @@ async function attachPlaybackSession(next: PlaybackSession, target: number, seq:
   session.value = next
   playing.value = true
   hasEverPlayed.value = true
+  // 外部承载没有「已转出范围」的概念（B 站自己管缓冲），不轮询窗口；
+  // 若之前是转码会话，顺手停掉残留的定时器
+  if (next.play_mode === 'bilibili') {
+    stopWindowPoll()
+    return
+  }
   // 新会话 = 新的「已可播范围」，重新开始轮询（内部会先归零）
   startWindowPoll()
 }
 
-const hasSourceFile = computed(() => !!(video.value && video.value.file_path))
+/**
+ * 外部承载（B 站 iframe）。
+ *
+ * 触发条件由后端决定（本地没有片源 + 已绑定 status=ok 的 BV），前端只负责渲染：
+ * 非空时用 iframe 替代 <VideoPlayer>，本地流字段此时全是 null。
+ * 注意不要用 `video.publish.playable` 判断——那是「这个视频有没有可播的源」，
+ * 而这里是「这一路会话是不是外部承载」，两者在切换画质/重建会话时不同步。
+ */
+const externalPlay = computed(() => {
+  const s = session.value
+  if (!s || s.play_mode !== 'bilibili' || !s.embed_url) return null
+  return {
+    embedUrl: s.embed_url,
+    watchUrl: s.watch_url || '',
+    bvid: s.embed_bvid || '',
+    page: s.embed_page || 1,
+  }
+})
+
+const hasSourceFile = computed(
+  () =>
+    !!(
+      video.value &&
+      // 本地有文件 → 原逻辑；在线版无文件但绑定了可播的 B 站视频 → 也算有源
+      (video.value.file_path || video.value.publish?.playable)
+    ),
+)
+
+// ===== B 站分发（P0 在线版播放源）=====
+const biliInput = ref('')
+const biliSaving = ref(false)
+
+function publishStatusLabel(status?: string) {
+  const map: Record<string, string> = {
+    ok: '可播放',
+    reviewing: '审核中',
+    locked: '已锁定',
+    missing: '已失效',
+    pending: '待发布',
+  }
+  return map[status || ''] || '未知状态'
+}
+
+function publishOriginLabel(origin?: string) {
+  const map: Record<string, string> = {
+    self_upload: '自己投稿',
+    third_party: '复用他人',
+    manual: '手动绑定',
+  }
+  return map[origin || ''] || '手动绑定'
+}
+
+async function saveBili() {
+  const raw = biliInput.value.trim()
+  if (!raw || !video.value) return
+  biliSaving.value = true
+  try {
+    // 先让后端归一化（完整地址 / 分享文案 / 裸 BV 都认），再落库，
+    // 避免前端自己写一套 BV 正则跟后端漂移。
+    const parsed = await musicVideosApi.parsePublish(video.value.id, raw)
+    if (parsed.error || !parsed.bvid) {
+      message.warning(parsed.error || '没找到 BV 号')
+      return
+    }
+    const row = await musicVideosApi.putPublish(video.value.id, {
+      bvid: parsed.bvid,
+      page: parsed.page,
+      origin: 'manual',
+      status: 'ok',
+    })
+    video.value.publish = row
+    biliInput.value = ''
+    message.success('已绑定 B 站视频')
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    biliSaving.value = false
+  }
+}
+
+async function unbindBili() {
+  if (!video.value) return
+  try {
+    await musicVideosApi.deletePublish(video.value.id)
+    video.value.publish = null
+    message.success('已解绑')
+  } catch (e) {
+    message.error((e as Error).message)
+  }
+}
 
 const sources = computed(() => {
   const s = session.value
   if (!s) return []
   const label = qualityLabel(activeQuality.value)
   if (s.manifest_url) {
-    return [{ src: s.manifest_url, type: 'application/x-mpegURL', label }]
+    // 兜底：没有 MSE 的浏览器（vivo/华为自带浏览器）走这条渐进转码流，
+    // 不经过 HLS。地址从会话 id 推导，省得为一个边缘场景改后端 schema。
+    const m = s.manifest_url.match(/\/sessions\/(\d+)\//)
+    // ★ 必须沿用清单里的 ?exp=&sig=：这些内核会把 <video> 劫持给**系统原生播放器**，
+    //   那是没有浏览器 Cookie 的独立进程。只带登录态的媒体地址在它手里必然 401，
+    //   表现就是厂商自己的「视频播放失败，可尝试以下操作 / 刷新网页」错误页。
+    const q = s.manifest_url.includes('?')
+      ? s.manifest_url.slice(s.manifest_url.indexOf('?'))
+      : ''
+    // ⚠ compat/progressive 端点只接受 transcode 会话（direct_stream 请求会 400）。
+    // 不能因为 UA 命中就无条件下发，否则「MSE 明明可用、服务端判了 direct_stream」
+    // 的设备会被前端强制切到 compat → 400 → 黑屏。
+    const canMp4Fallback = s.play_mode === 'transcode' && !!m
+    return [
+      {
+        src: s.manifest_url,
+        type: 'application/x-mpegURL',
+        label,
+        fallbackSrc: canMp4Fallback
+          ? `/api/playback/sessions/${m[1]}/progressive.mp4${q}`
+          : undefined,
+        // 兼容版：普通 MP4（moov 前置、有真实时长、支持 Range），给被劫持的内核用
+        compatSrc: canMp4Fallback
+          ? `/api/playback/sessions/${m[1]}/compat.mp4${q}`
+          : undefined,
+      },
+    ]
   }
   if (s.stream_url) {
     const ext = (s.container || '').toLowerCase()
@@ -509,7 +807,7 @@ const sources = computed(() => {
       ext === 'webm' || ext === 'mkv' ? 'video/webm'
       : ext === 'mp4' || ext === 'm4v' || ext === 'mov' ? 'video/mp4'
       : 'video/mp4'
-    return [{ src: s.stream_url, type, label }]
+    return [{ src: s.stream_url, type, label, fallbackSrc: undefined, compatSrc: undefined }]
   }
   return []
 })
@@ -520,15 +818,80 @@ function qualityLabel(key: string) {
   return QUALITY_LABEL[key] || key.toUpperCase()
 }
 
-function onPlayerState(payload: { buffering: boolean; error: string | null }) {
+/**
+ * 把「播放失败」的现场写回服务端日志。
+ * 手机自带浏览器上看不到控制台，而服务端只看到「没有请求」—— 中间发生了什么
+ * 只能靠这条回传：MSE 有无、hls 可用性、媒体元素错误码、当前源与兜底地址。
+ */
+function reportDiag(kind: string, extra: Record<string, unknown> = {}) {
+  try {
+    const probe = document.createElement('video')
+    let mseAvc: boolean | string = 'no-ms'
+    try {
+      if (typeof MediaSource !== 'undefined') {
+        mseAvc = !!MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"')
+      }
+    } catch {
+      mseAvc = 'err'
+    }
+    const body = {
+      kind,
+      ua: (navigator.userAgent || '').slice(0, 200),
+      mse: typeof MediaSource !== 'undefined',
+      mseAvc,
+      nativeHls: !!probe.canPlayType('application/vnd.apple.mpegurl'),
+      session: session.value
+        ? {
+            id: session.value.session_id,
+            mode: session.value.play_mode,
+            q: session.value.quality,
+          }
+        : null,
+      sources: sources.value.map((s) => ({
+        src: String(s.src || '').slice(0, 70),
+        fb: !!s.fallbackSrc,
+      })),
+      ...extra,
+    }
+    void fetch('/api/playback/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).catch(() => {})
+  } catch {
+    /* 诊断本身失败不能影响播放 */
+  }
+}
+
+function onPlayerState(payload: {
+  buffering: boolean
+  error: string | null
+  errorKind?: 'network' | 'decode' | 'capability' | 'unknown'
+  errorCode?: number
+}) {
   playerBuffering.value = payload.buffering
   playerError.value = payload.error || ''
+  if (payload.error) {
+    reportDiag('player-state', {
+      error: payload.error.slice(0, 160),
+      kind: payload.errorKind || 'unknown',
+      code: payload.errorCode || 0,
+    })
+  }
   if (payload.error && /401|未登录|unauthorized/i.test(payload.error)) {
     router.replace({ name: 'login', query: { redirect: route.fullPath } })
     return
   }
+  // 只对确定的解码/格式失败自动降级并写「原画失败」记忆。
+  // 断网、切片 5xx、超时属于临时故障，自动转码既救不了，还会把同类片
+  // 在 7 天内全部误压到低档位。
+  const decodeFailure =
+    payload.errorKind === 'decode' ||
+    payload.errorCode === 3 ||
+    payload.errorCode === 4
   if (
     payload.error &&
+    decodeFailure &&
     !originalDecodeFailed &&
     session.value &&
     activeQuality.value === 'original' &&
@@ -559,10 +922,11 @@ function onTimeUpdate(currentTime: number) {
 async function onSeeked(targetTime: number) {
   const target = Math.max(0, targetTime)
   const s = session.value
+  const keepPaused = !shouldAutoPlay.value
   playing.value = true
   hasEverPlayed.value = true
   if (!s) {
-    await startPlayAt(target)
+    await startPlayAt(target, { autoPlay: !keepPaused })
     return
   }
   if (s.play_mode === 'direct_play') return
@@ -576,7 +940,7 @@ async function onSeeked(targetTime: number) {
     seekDebounceTimer = null
     void (async () => {
       try {
-        await startPlayAt(target)
+        await startPlayAt(target, { autoPlay: !keepPaused })
       } finally {
         if (uiGen === seekUiGen) isSeeking.value = false
       }
@@ -590,6 +954,48 @@ const poster = computed(() => {
   if (!settings.showCovers || !video.value || brokenThumbs.value.has(video.value.id)) return undefined
   return musicVideosApi.thumbnailUrl(id.value, posterBust.value || undefined, IMG_W_FULL)
 })
+
+/**
+ * 实际显示的封面：**新图 decode 完再替换**。
+ *
+ * 直接绑定 `poster` 时，切场次/机位瞬间 src 就换了，但新图要 150ms 左右才解码完
+ * （NAS 上首次还要现生成变体），中间 hero 是空白 —— 实测 4~5 帧空白。
+ * 这里保留旧图直到新图可用，切换视觉上就是「直接换过去」而不是「闪一下」。
+ */
+const displayedPoster = ref('')
+let posterSwapToken = 0
+watch(
+  poster,
+  (src) => {
+    const token = ++posterSwapToken
+    if (!src) {
+      displayedPoster.value = ''
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      if (token === posterSwapToken) displayedPoster.value = src
+    }
+    img.onerror = () => {
+      if (token === posterSwapToken) displayedPoster.value = src
+    }
+    img.src = src
+    // 命中缓存时 onload 可能已经错过：补一次同步判断
+    if (img.complete && img.naturalWidth > 0 && token === posterSwapToken) {
+      displayedPoster.value = src
+    }
+  },
+  { immediate: true },
+)
+
+/** 矩阵胶囊 hover 预取下一张封面：真点下去时图片已在缓存里，切图零空窗 */
+const prefetchedPosters = new Set<number>()
+function prefetchPoster(videoId: number) {
+  if (!videoId || prefetchedPosters.has(videoId)) return
+  prefetchedPosters.add(videoId)
+  const img = new Image()
+  img.src = musicVideosApi.thumbnailUrl(videoId, undefined, IMG_W_FULL)
+}
 
 function onThumbError() {
   if (video.value) brokenThumbs.value = new Set(brokenThumbs.value).add(video.value.id)
@@ -613,22 +1019,12 @@ function onRelatedThumbError(itemId: number) {
   brokenRelatedThumbs.value = new Set(brokenRelatedThumbs.value).add(itemId)
 }
 
-function formatDesc(text?: string | null) {
-  return (text || '').replace(/\{BR\}/g, '\n')
-}
-
-const hasOriginalDesc = computed(() => {
-  const v = video.value
-  return !!(v && v.chinese_description && v.description && v.description !== v.chinese_description)
-})
-
-function onDescClick() {
-  if (hasOriginalDesc.value) showOriginal.value = !showOriginal.value
-}
-
 async function load(opts: { keepPlayback?: boolean } = {}) {
   const seq = ++loadSeq
   const param = routeKey.value.trim()
+  // 切换前是否**真的在出画**：暂停时切场次/机位应保持暂停，不能因为
+  // `playing`（页面播放模式）仍为 true 就自动出声。
+  const wasPlaying = !mediaPaused.value && !opts.keepPlayback
   if (!param) {
     if (seq !== loadSeq) return
     notFound.value = true
@@ -641,17 +1037,18 @@ async function load(opts: { keepPlayback?: boolean } = {}) {
     const mv = await fetchByRouteParam(param, musicVideosApi.getByUid, musicVideosApi.get)
     if (seq !== loadSeq) return
     video.value = mv
-    detailsExpanded.value = false
     if (mv.uid && mv.uid !== param) {
       router.replace(videoPath(mv.uid))
     }
-    showOriginal.value = false
     if (!opts.keepPlayback) {
       playing.value = false
       hasEverPlayed.value = false
       mediaPaused.value = true
+      shouldAutoPlay.value = false
       playerBuffering.value = false
       playerError.value = ''
+      // 切场次/机位：右舱内容直接换，不重放波浪入场
+      dockWave.value = false
     }
     if (!userPickedQuality.value) {
       // 原画直出失败过的同类片（编码+分辨率档）：默认直接转码档位，
@@ -676,6 +1073,16 @@ async function load(opts: { keepPlayback?: boolean } = {}) {
   if (seq !== loadSeq) return
   await loadRelated()
   void loadChapters()
+  const loaded = video.value
+  if (!loaded) return
+  void loadStageMatrix(loaded.id)
+  // 切场次/机位：不继承上一段进度，但**保持播放**（从头播）。
+  // 关键：必须无条件重建播放会话 —— 否则 <video> 仍指向旧机位的 session，
+  // 页面已经换成新机位、画面却还在播上一个（实测会话 579 切完后继续播了 6s）。
+  if (wasPlaying && hasSourceFile.value) {
+    lastKnownTime.value = 0
+    void startPlayAt(0)
+  }
 }
 
 /** 外挂同名字幕轨（后端统一转 VTT）。加载失败静默 —— 字幕是锦上添花，不能挡播放 */
@@ -687,25 +1094,35 @@ async function loadSubtitles(videoId: number) {
   }
 }
 
+/**
+ * 相关作品缓存：按 song_id 存。
+ * 同一首歌的「相关作品」列表与当前看的是哪个机位无关，切机位时直接复用，
+ * 不再每次多打一发 `music-videos?page_size=6&song_id=…`。
+ */
+const relatedCache = new Map<number, MusicVideoRelated>()
+function applyRelated(res: MusicVideoRelated) {
+  const current = video.value?.id
+  const works = (res.works || []).filter((w) => w.video.id !== current)
+  related.value = works.map((w) => w.video)
+  relatedPeople.value = res.artists || []
+}
 async function loadRelated() {
   const v = video.value
   if (!v) return
-  const params: { song_id?: number; page_size: number } = { page_size: 6 }
-  if (v.song_id) params.song_id = v.song_id
-  else {
-    related.value = []
+  const cached = relatedCache.get(v.id)
+  if (cached) {
+    applyRelated(cached)
     return
   }
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 8000)
   try {
-    const res = await musicVideosApi.list(
-      { ...params, ingestion_status: 'library' },
-      { signal: controller.signal },
-    )
-    related.value = res.items.filter((x) => x.id !== v.id).slice(0, 5)
+    const res = await musicVideosApi.related(v.id)
+    relatedCache.set(v.id, res)
+    applyRelated(res)
   } catch {
     related.value = []
+    relatedPeople.value = []
   } finally {
     window.clearTimeout(timer)
   }
@@ -716,13 +1133,10 @@ async function loadRelated() {
 // PC 悬停视频区域唤出、点击即播；移动端单击唤出、双击（350ms 内两次点击）即播。
 const playerArmed = ref(false)
 const playerVisible = computed(() => playing.value || playerArmed.value)
-// 悬停语义只在真指针设备启用（触屏设备 matchMedia('hover:hover') 为 false，走单击/双击）
+// 悬停语义只在真指针设备启用（触屏设备 matchMedia('hover:hover') 为 false，走单击唤出）
 const canHover =
   typeof window !== 'undefined' &&
   window.matchMedia('(hover: hover) and (pointer: fine)').matches
-// 移动端双击判定：两次点击间隔阈值（ms）
-const DOUBLE_TAP_MS = 350
-let lastHeroTapAt = 0
 
 function onHeroEnter() {
   if (!canHover || !hasSourceFile.value || playing.value || hasEverPlayed.value) return
@@ -736,36 +1150,26 @@ function onHeroLeave() {
 }
 
 function onHeroTap() {
-  // 移动端：单击封面唤出播放器；时间戳同时供覆盖层做双击判定
-  if (canHover || !hasSourceFile.value || playing.value || hasEverPlayed.value) return
-  lastHeroTapAt = Date.now()
+  // 单击只负责唤出菜单栏（不直接播放）—— PC 与触屏一致
+  if (!hasSourceFile.value || playing.value || hasEverPlayed.value) return
   playerArmed.value = true
 }
 
-function onHeroOverlayTap() {
-  // PC：单击画面即播；移动端：350ms 内第二次点击（双击）即播
-  if (playing.value || hasEverPlayed.value) return
-  if (canHover) {
-    startPlay()
-    return
-  }
-  const now = Date.now()
-  if (now - lastHeroTapAt < DOUBLE_TAP_MS) {
-    lastHeroTapAt = 0
-    startPlay()
-  } else {
-    lastHeroTapAt = now
-  }
+/** 封面状态或菜单栏已出现时，双击播放器区域 = 起播 */
+function onHeroDblClick() {
+  if (!hasSourceFile.value || playing.value || hasEverPlayed.value) return
+  startPlay()
 }
 
 async function startPlay() {
   if (!video.value) return
   playing.value = true
   hasEverPlayed.value = true
-  mediaPaused.value = false
+  shouldAutoPlay.value = true
   // 已有会话且源就绪：只把 pending 关掉，播放器 watch 会接着 play()
-  if (session.value && sources.value.length) return
-  await startPlayAt(lastKnownTime.value || 0)
+  // 外部承载没有 sources（iframe 自带播放控制），也要走这个早退分支
+  if (session.value && (sources.value.length || externalPlay.value)) return
+  await startPlayAt(lastKnownTime.value || 0, { autoPlay: true })
 }
 
 // 在指定时间点创建会话并开始播放（Emby 式任意 seek 的统一入口）。
@@ -780,14 +1184,19 @@ async function createSessionWithRetry(quality: string, startSeconds: number): Pr
   }
 }
 
-async function startPlayAt(t: number) {
+async function startPlayAt(
+  t: number,
+  opts: { autoPlay?: boolean } = {},
+) {
   if (!video.value) return
   const target = Math.max(0, t)
   const requested = activeQuality.value
   const wantOriginal = requested === 'original'
   playing.value = true
   hasEverPlayed.value = true
-  mediaPaused.value = false
+  // 这里不再提前把 mediaPaused 置 false：会话还没建、媒体还没出画。
+  // 观看计时只由真实 @play 启动，避免「只是打开页面 / 自动播放被拒」也计观看。
+  shouldAutoPlay.value = opts.autoPlay ?? true
   sessionLoading.value = true
   playerError.value = ''
   const seq = ++seekSeq
@@ -797,10 +1206,17 @@ async function startPlayAt(t: number) {
       await stopSession(next.session_id)
       return
     }
-    if (wantOriginal && next.play_mode === 'transcode') {
-      // 服务端判定「original 根本无法直接播」（如 Safari 解不了 HEVC）：
-      // 同样记入失败记忆，下次同类片默认直接转码
-      markOrigFailClass(video.value)
+    // ★ 只有服务端**明确降档**（quality !== original）才算「原画不可用」。
+    // `play_mode === 'transcode'` 本身不代表降档：MKV/无 MSE 设备上，
+    // 「transcode + original」是正常且最优的路径 —— 服务端按源尺寸输出，
+    // 前端再走 compat remux 成 MP4 直连（实测 4K 5 秒、8K 13 秒，零重编码）。
+    // 旧条件只判 play_mode，等于把所有「需要换容器」的片子都强行降档
+    // （业主 2026-11-09 实拍：点原画播出来是 720P h264）。
+    if (wantOriginal && next.play_mode === 'transcode' && next.quality !== 'original') {
+      // ⚠ 这里**不记** markOrigFailClass：服务端按「分辨率超上限」降档属于
+      // 能力判定，不是解码失败。记进去会让这个编码+档位的所有片子
+      // 默认压到转码档，且用户再也没机会试原画（实拍症状：8K 永远 720P）。
+      // 真正的解码失败记忆只由 onPlayerState 的 originalDecodeFailed 负责。
       await stopSession(next.session_id)
       await fallbackTranscodePlay(
         next.decision_reason || '原画无法直出，已自动转码播放。',
@@ -815,8 +1231,8 @@ async function startPlayAt(t: number) {
     if (seq !== seekSeq) return
     const busy = isBusyError(e)
     const text = busy ? '转码繁忙，请稍后再试' : (e as Error).message
+    // 错误改为播放器下方常驻显示（playerError），不再弹一闪而过的 toast
     playerError.value = text
-    message.error(text)
     if (!session.value) {
       playing.value = false
       hasEverPlayed.value = false
@@ -827,9 +1243,19 @@ async function startPlayAt(t: number) {
 }
 
 // ===== Playback Session（统一播放链路，播放策略由服务端决定） =====
-function playModeLabel(mode: string) {
+/**
+ * 播放模式徽标。
+ *
+ * ⚠ `transcode + original` **不等于降质转码**：设备端能解源编码时服务端只换容器
+ * （remux，`-c:v copy`），画面逐像素与原画一致。把它标成「转码」会让业主以为
+ * 被偷偷降质了（2026-11-09 实测反馈）。只有真的压到低档位才写「转码」。
+ */
+function playModeLabel(mode: string, quality?: string) {
   if (mode === 'direct_play') return '原画直连'
   if (mode === 'direct_stream') return '原画直出'
+  if (mode === 'bilibili') return 'B 站外链'
+  // 只有明确 original 才敢说原画；quality 缺失时保守按转码显示
+  if (quality === 'original') return '原画'
   return '转码'
 }
 
@@ -889,27 +1315,81 @@ async function probeDecoding(
 }
 
 /** 视频探测配置：高度按档位向上归并（缓存粒度有限，避免每个视频一个 key）。 */
+/** 编码名归一：与服务端 `_VIDEO_ALIASES` 同口径，避免 mkv 里的 h265/avc 认不出 */
+function normalizeCodec(raw?: string | null): string {
+  const n = (raw || '').toLowerCase().trim()
+  if (n === 'avc' || n === 'avc1' || n === 'avc3' || n === 'h264') return 'h264'
+  if (n === 'h265' || n === 'hev1' || n === 'hvc1' || n === 'hevc') return 'hevc'
+  if (n === 'av01' || n === 'av1') return 'av1'
+  if (n === 'vp09' || n === 'vp9') return 'vp9'
+  return n
+}
+
 function probeVideoConfig(width?: number, height?: number): VideoConfiguration {
-  const h = Math.max(480, Math.min(Math.round(height || 1080), 2160))
-  const tier = [480, 720, 1080, 1440, 2160].find((t) => h <= t) ?? 2160
-  const aspect = width && height ? width / height : 16 / 9
+  const srcW = Math.max(2, Math.round(width || 1920))
+  const srcH = Math.max(2, Math.round(height || 1080))
+  const short = Math.min(srcW, srcH)
+  // 档位按**短边**选（与后端 resolve_target_dimensions 同口径）。
+  // ★ 必须含 4320（8K）：业主库内实测 8K 源 93 条（7680×4320 AV1）。
+  //   上限只到 2160 时，8K 会被探成 3840×2160 → 上报的 max 小于源 →
+  //   服务端判「超上限」→ 降档转码（实拍表现：点原画播出来 720P）。
+  const TIERS = [480, 720, 1080, 1440, 2160, 4320]
+  const tier = TIERS.find((t) => short <= t) ?? 4320
+  const scale = short > tier ? tier / short : 1
+  const w = Math.max(16, Math.round((srcW * scale) / 2) * 2)
+  const h = Math.max(16, Math.round((srcH * scale) / 2) * 2)
   const bitrate =
-    tier >= 2160 ? 15_000_000
-      : tier >= 1440 ? 9_000_000
-        : tier >= 1080 ? 6_000_000
-          : tier >= 720 ? 3_500_000
-            : 1_800_000
+    tier >= 4320 ? 40_000_000
+      : tier >= 2160 ? 15_000_000
+        : tier >= 1440 ? 9_000_000
+          : tier >= 1080 ? 6_000_000
+            : tier >= 720 ? 3_500_000
+              : 1_800_000
   return {
     contentType: 'video/mp4',
-    width: Math.max(320, Math.round(tier * aspect)),
-    height: tier,
+    width: w,
+    height: h,
     bitrate,
     framerate: 30,
   }
 }
 
+/**
+ * 上报给服务端的「解码尺寸上限」。
+ *
+ * ★ 2026-11-09 业主口径：**设备端能解就别转码，服务端转码只是兜底**。
+ * 旧实现把移动端写死成 1920×1080，结果平板明明硬解 4K，服务端也只给
+ * 降档转码 —— 低功耗 NAS 软编顶不住，表现就是「安卓平板一直转圈」。
+ *
+ * ⚠ 字段语义必须按服务端口径：
+ *   `max_height` = **短边**上限、`max_width` = **长边**上限
+ *   （见 `playback_resolver._source_exceeds_client`）。
+ *   竖屏 2026×3840 要报 `{max_width: 3840, max_height: 2026}`；
+ *   直接传源宽高会让长边 3840 撞上 2026 的"宽度上限"，被判超限降档。
+ *
+ * 判据：源编码在设备能力表里 → 允许到源尺寸（`probeVideoConfig` 已按源算好、
+ * 只降不升）；解不了才退回 1080 保守档。
+ */
+function decodeCapFor(
+  dims: VideoConfiguration,
+  sourceCodec: string,
+  codecs: string[],
+): { max_width: number; max_height: number } {
+  const codec = normalizeCodec(sourceCodec)
+  const decodable = !codec || codecs.includes(codec)
+  if (!decodable) return { max_width: 1920, max_height: 1080 }
+  const short = Math.min(dims.width, dims.height)
+  const long = Math.max(dims.width, dims.height)
+  return { max_width: long, max_height: short }
+}
+
 async function clientCapabilities(): Promise<Record<string, unknown>> {
   if (typeof document === 'undefined') return {}
+  // 平板客户端：直接用原生 MediaCodecList 探测的真实能力上报。
+  // 服务端据此走**直连**（默认不转码）；只有用户在画质菜单里主动选非「原画」档，
+  // 才会带 requested_quality 让服务端转码 —— 转码是用户的选择，不是兜底。
+  const nativeCaps = nativeCapabilities()
+  if (nativeCaps && nativeCaps.supported_video_codecs) return nativeCaps
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : ''
   const isIOS = /iPhone|iPad|iPod/i.test(ua)
   const isAppleSafari =
@@ -917,14 +1397,23 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
 
   // 无 MediaCapabilities API 的旧浏览器：回退 canPlayType 粗判（旧口径整体保留）
   if (typeof navigator.mediaCapabilities?.decodingInfo !== 'function') {
-    return legacyClientCapabilities(ua, isIOS, isAppleSafari)
+    return legacyClientCapabilities(
+      ua,
+      isIOS,
+      isAppleSafari,
+      probeVideoConfig(
+        video.value?.width ?? undefined,
+        video.value?.height ?? undefined,
+      ),
+      video.value?.video_codec || '',
+    )
   }
 
   const dims = probeVideoConfig(video.value?.width ?? undefined, video.value?.height ?? undefined)
 
   const [
     h264Anchor, h264, hevc, av1File, av1Ms, vp9File, vp9Ms,
-    aac, opus, mp3, flac, vorbis, ac3, eac3, mpegts, fmp4Ms,
+    aac, opus, mp3, flac, vorbis, ac3, eac3, mpegts,
   ] = await Promise.all([
     // v3.5.4 可信度锚点：720p H.264 是任何正常环境的底线解码能力。
     // 个别环境（GPU 查询异常/远程桌面）decodingInfo 全 false（连 H.264 都不报），
@@ -943,9 +1432,15 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
     // 与 2160 档探测尺寸矛盾；另见下方 canProbably 兜底
     probeDecoding('file', { ...dims, contentType: 'video/mp4; codecs="avc1.42E01E"' }),
     probeDecoding('file', { ...dims, contentType: 'video/mp4; codecs="hvc1.1.6.L153.B0"' }),
-    probeDecoding('file', { ...dims, contentType: 'video/webm; codecs="av01.0.05M.08"' }),
+    // ★ AV1 / VP9 的 file 探测必须用 **MP4**，不能用 WebM：
+    //   remux 产物是 MP4，而部分设备恰恰「能解 MP4 里的 AV1/VP9、解不了 WebM」
+    //   （实测 vivo Pad / Android 16：can_av1_mp4=probably，
+    //    MediaCapabilities VP9 4K file/mp4 supported=true，file/webm=false）。
+    //   用 webm 探测会把这类设备的 AV1/VP9 能力报成「不可解」，
+    //   于是库内 96% 的 VP9/AV1 源全部退化成服务端转码。
+    probeDecoding('file', { ...dims, contentType: 'video/mp4; codecs="av01.0.05M.08"' }),
     probeDecoding('media-source', { ...dims, contentType: 'video/mp4; codecs="av01.0.13M.08"' }),
-    probeDecoding('file', { ...dims, contentType: 'video/webm; codecs="vp09.00.51.08"' }),
+    probeDecoding('file', { ...dims, contentType: 'video/mp4; codecs="vp09.00.51.08"' }),
     probeDecoding('media-source', { ...dims, contentType: 'video/mp4; codecs="vp09.00.51.08"' }),
     // 音频编码
     probeDecoding('file', { contentType: 'audio/mp4; codecs="mp4a.40.2"', bitrate: 128_000 }),
@@ -955,9 +1450,9 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
     probeDecoding('file', { contentType: 'audio/webm; codecs="vorbis"', bitrate: 128_000 }),
     probeDecoding('file', { contentType: 'audio/mp4; codecs="ac-3"', bitrate: 384_000 }),
     probeDecoding('file', { contentType: 'audio/mp4; codecs="ec-3"', bitrate: 384_000 }),
-    // 交付形态：MPEG-TS（H.264 转码）/ fMP4（AV1/VP9 remux 直出）
+    // 交付形态：MPEG-TS（H.264 转码）。fMP4 的可交付性只认 MediaSource.isTypeSupported，
+    // 见下方 supports_fmp4 —— decodingInfo 会误报「伪 MSE」环境。
     probeDecoding('file', { ...dims, contentType: 'video/mp2t; codecs="avc1.42E01E, mp4a.40.2"' }),
-    probeDecoding('media-source', { ...dims, contentType: 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"' }),
   ])
 
   // canPlayType 兜底：decodingInfo 对依赖平台硬解的 HEVC / 部分 VP9 组合可能漏报
@@ -995,7 +1490,7 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
   ) videoCodecs.push('hevc')
   if ((av1File.supported || av1Ms.supported) && mseGate('video/mp4; codecs="av01.0.08M.08"')) videoCodecs.push('av1')
   if (
-    (vp9File.supported || vp9Ms.supported || canProbablySafe('video/webm; codecs="vp09.00.51.08"')) &&
+    (vp9File.supported || vp9Ms.supported || canProbablySafe('video/mp4; codecs="vp09.00.51.08"')) &&
     // vp09.00.00.08 与服务端 remux 清单的 CODECS 串保持一致（hls.js 按清单串查 MSE）
     mseGate('video/mp4; codecs="vp09.00.00.08"')
   ) videoCodecs.push('vp9')
@@ -1026,8 +1521,8 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
   const progressiveVideo: string[] = []
   if (h264.supported || canProbablySafe('video/mp4; codecs="avc1.42E01E"')) progressiveVideo.push('h264')
   if (hevc.supported || canProbablySafe('video/mp4; codecs="hvc1.1.6.L153.B0"')) progressiveVideo.push('hevc')
-  if (av1File.supported || canProbablySafe('video/webm; codecs="av01.0.05M.08"')) progressiveVideo.push('av1')
-  if (vp9File.supported || canProbablySafe('video/webm; codecs="vp9"')) progressiveVideo.push('vp9')
+  if (av1File.supported || canProbablySafe('video/mp4; codecs="av01.0.05M.08"')) progressiveVideo.push('av1')
+  if (vp9File.supported || canProbablySafe('video/mp4; codecs="vp09.00.51.08"')) progressiveVideo.push('vp9')
   const progressiveAudio: string[] = []
   if (aac.supported || canProbably('audio/mp4; codecs="mp4a.40.2"')) progressiveAudio.push('aac')
   if (opus.supported || canProbably('audio/webm; codecs="opus"')) progressiveAudio.push('opus')
@@ -1046,18 +1541,24 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
   // 渐进容器：桌面 Chromium 内置 Matroska demuxer（file:// 能播 MKV 即同源能力），
   // 渐进可解任一 Matroska 内视频编码时把 mkv 报进容器列表（Direct Play 资格）。
   // Apple 原生管线不支持 Matroska，不报。
-  const canMaybeType = (mime: string) => {
-    const r = probeEl.canPlayType?.(mime) || ''
-    return r === 'probably' || r === 'maybe'
-  }
   const containers = isAppleSafari
     ? ['mp4', 'm4v', 'mov']
     : ['mp4', 'm4v', 'mov', 'webm']
-  if (
-    !isAppleSafari &&
-    progressiveVideo.length > 0 &&
-    (canMaybeType('video/x-matroska; codecs="vp9"') || canMaybeType('video/x-matroska; codecs="avc1.42E01E"'))
-  ) {
+  /**
+   * Matroska 只能靠**实测口径**判断，不能问 canPlayType：
+   * Chrome/Edge 内核明明带 Matroska demuxer（实测 8K MKV 直连 33ms 出首帧），
+   * 但对 `video/x-matroska` 统一返回空串 → 旧写法永远报不上去，
+   * 后端看到「容器不支持: mkv」就把每条 4K/8K 都判成转码。
+   * 口径：非 Apple、非 Firefox（Firefox 只认 WebM，不认 MKV），且渐进可解任一视频编码。
+   */
+  const isFirefox = /Firefox|FxiOS/i.test(ua)
+  /**
+   * 手机不上报 mkv：桌面 Chromium 有内置 Matroska demuxer，手机内核未必有
+   * （实测 vivo 自带浏览器：直连 MKV 只请求一次 /stream 就中断）。
+   * 手机也不报「无上限」分辨率 —— 4K60 AV1 直连在手机上是必挂项。
+   */
+  const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+  if (!isAppleSafari && !isFirefox && !isMobile && progressiveVideo.length > 0) {
     containers.push('mkv')
   }
 
@@ -1069,12 +1570,18 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
     progressive_audio_codecs: progressiveAudio,
     // MSE 交付容器（remux 后），Direct Play 容器资格以渐进 demuxer 实测为准（见上）
     supported_containers: containers,
-    // 本播放器：Apple 走 <video> 原生 HLS，其它浏览器走 hls.js（MSE），
-    // 两者都能播服务端交付的 HLS，一律报 true。
-    supports_hls: true,
+    // 本播放器：Apple 走 <video> 原生 HLS，其它浏览器走 hls.js（MSE）。
+    // ⚠ 不能无条件报 true：vivo / 华为等定制内核会没有可用的 MediaSource，
+    // 报了 true 服务端就只给 HLS，前端却根本挂不上（manifest 一次都不请求）。
+    supports_hls: isAppleSafari || hlsCapable(),
     supports_mpegts: isAppleSafari ? true : mpegts.supported,
-    // fMP4 交付可行性以 MSE 实测为准（decodingInfo 在个别环境全 false，但 MSE 真实可用）
-    supports_fmp4: isAppleSafari ? true : (mseOk('video/mp4; codecs="avc1.42E01E"') || fmp4Ms.supported),
+    // fMP4 交付必须**真的**能 append：`MediaSource.isTypeSupported` 是唯一真值。
+    // ⚠ vivo/华为定制内核存在「伪 MSE」—— `MediaSource` 对象在、`decodingInfo`
+    //   对 4K HEVC 报 supported=true，但 `isTypeSupported` 全 false（实测
+    //   vivo Pad / Android 16 / VivoBrowser 31）。带上 decodingInfo 的结论会让
+    //   服务端给 direct_stream，前端 hls.js 根本挂不上，compat 又只服务 transcode
+    //   → 400 → 黑屏。这里只认 isTypeSupported。
+    supports_fmp4: isAppleSafari ? true : mseOk('video/mp4; codecs="avc1.42E01E"'),
     supports_h264: videoCodecs.includes('h264'),
     supports_hevc: videoCodecs.includes('hevc'),
     supports_av1: videoCodecs.includes('av1'),
@@ -1082,14 +1589,36 @@ async function clientCapabilities(): Promise<Record<string, unknown>> {
     supports_aac: audioCodecs.includes('aac'),
     supports_ac3: ac3.supported,
     supports_eac3: eac3.supported,
-    max_width: 0,
-    max_height: 0,
+    // ★ 设备端优先：**必须用 progressiveVideo（<video> 文件口径）**判断，
+    //   不能用 videoCodecs（MSE 口径）—— 伪 MSE 设备（vivo/华为定制内核）
+    //   的 videoCodecs 恒为空，会把它误判成「什么都解不了」而永远降档。
+    ...decodeCapFor(dims, video.value?.video_codec || '', progressiveVideo),
     user_agent: ua,
   }
 }
 
+/**
+ * 这台机器到底能不能走 HLS 交付。
+ * Apple 有原生 HLS；其余浏览器必须靠 MSE，而 MSE 能不能吃 H.264 是设备/内核决定的
+ * —— 与 `Hls.isSupported()` 的判据保持一致，避免「上报说支持、播放器却挂不上」。
+ */
+function hlsCapable(): boolean {
+  try {
+    if (typeof MediaSource === 'undefined') return false
+    return !!MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"')
+  } catch {
+    return false
+  }
+}
+
 /** 无 MediaCapabilities API 的旧浏览器回退：canPlayType / isTypeSupported 粗判（旧口径）。 */
-function legacyClientCapabilities(ua: string, isIOS: boolean, isAppleSafari: boolean): Record<string, unknown> {
+function legacyClientCapabilities(
+  ua: string,
+  isIOS: boolean,
+  isAppleSafari: boolean,
+  dims: VideoConfiguration,
+  sourceCodec: string,
+): Record<string, unknown> {
   const v = document.createElement('video')
   // 只认 'probably'（浏览器明确声明可解码），'maybe' 不算支持，避免误报解码能力
   const can = (mime: string) => (v.canPlayType?.(mime) || '') === 'probably'
@@ -1168,8 +1697,10 @@ function legacyClientCapabilities(ua: string, isIOS: boolean, isAppleSafari: boo
   const containers = isAppleSafari
     ? ['mp4', 'm4v', 'mov']
     : ['mp4', 'm4v', 'mov', 'webm']
+  const isMobileUa = /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
   if (
     !isAppleSafari &&
+    !isMobileUa &&
     progressiveVideo.length > 0 &&
     (canMaybe('video/x-matroska; codecs="vp9"') || canMaybe('video/x-matroska; codecs="avc1.42E01E"'))
   ) {
@@ -1181,7 +1712,7 @@ function legacyClientCapabilities(ua: string, isIOS: boolean, isAppleSafari: boo
     progressive_video_codecs: progressiveVideo,
     progressive_audio_codecs: progressiveAudio,
     supported_containers: containers,
-    supports_hls: true,
+    supports_hls: isAppleSafari || hlsCapable(),
     supports_mpegts: isAppleSafari ? true : can('video/mp2t'),
     supports_fmp4:
       can('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')
@@ -1194,11 +1725,14 @@ function legacyClientCapabilities(ua: string, isIOS: boolean, isAppleSafari: boo
     supports_aac: audioCodecs.includes('aac'),
     supports_ac3: can('audio/mp4; codecs="ac-3"'),
     supports_eac3: can('audio/mp4; codecs="ec-3"'),
-    max_width: 0,
-    max_height: 0,
+    // ★ 设备端优先：同上，用 progressiveVideo（文件口径）而非 MSE 口径
+    ...decodeCapFor(dims, sourceCodec, progressiveVideo),
     user_agent: ua,
   }
 }
+
+/** 8K 只能靠客户端硬解；一旦落到转码就必然卡顿 —— 只提示一次，别在切画质时反复弹 */
+let uhd8kWarned = false
 
 async function createSession(quality: string, startSeconds: number): Promise<PlaybackSession> {
   const payload: CreatePlaybackSessionPayload = {
@@ -1207,7 +1741,18 @@ async function createSession(quality: string, startSeconds: number): Promise<Pla
     start_seconds: startSeconds,
     client: await clientCapabilities(),
   }
-  return playbackApi.create(payload)
+  const session = await playbackApi.create(payload)
+  const w = Number(video.value?.width) || 0
+  const h = Number(video.value?.height) || 0
+  const is8k = Math.min(w, h) >= 4320
+  if (is8k && session.play_mode === 'transcode' && !uhd8kWarned) {
+    uhd8kWarned = true
+    message.warning(
+      '这是 8K 片源，当前设备没能直接解码，正在实时转码——会明显卡顿。建议换支持 AV1 硬解的设备，或切到 4K 档。',
+      { duration: 6000 },
+    )
+  }
+  return session
 }
 
 // 切换画质：播放中新建对应规格的 PlaybackSession，旧会话交由服务端引用计数关闭；待播放时仅更新预选画质
@@ -1217,10 +1762,12 @@ async function selectQuality(key: string) {
     if (!playing.value) return
     if (key !== 'original' || session.value?.play_mode !== 'transcode') return
   }
+  // 暂停状态切画质只换源，不恢复播放；播放中才续播。
+  const resume = !mediaPaused.value
   userPickedQuality.value = true
   activeQuality.value = key
   if (!playing.value) return
-  await startPlayAt(lastKnownTime.value || 0)
+  await startPlayAt(lastKnownTime.value || 0, { autoPlay: resume })
 }
 
 let heartbeatTimer: number | null = null
@@ -1358,22 +1905,41 @@ watch(transcodePromptShow, (show, was) => {
   }
 })
 
-let phoneMq: MediaQueryList | null = null
-function onPhoneViewportChange() {
-  phoneViewport.value = phoneMq?.matches ?? phoneViewport.value
+// 页面级异常也回传：手机上「播放失败」有时是 JS 抛错（例如内核不认某个语法），
+// 这种既不会走播放器 error 事件，也不会出现在服务端日志里。
+function onWindowError(e: ErrorEvent) {
+  reportDiag('js-error', {
+    msg: String(e.message || '').slice(0, 160),
+    src: String(e.filename || '').split('/').pop()?.slice(0, 60),
+    line: e.lineno,
+  })
+}
+function onUnhandledRej(e: PromiseRejectionEvent) {
+  const r = e.reason as { message?: string } | string | undefined
+  const msg = typeof r === 'string' ? r : r?.message || ''
+  reportDiag('promise-rejection', { msg: String(msg).slice(0, 160) })
 }
 
 onMounted(() => {
+  window.addEventListener('error', onWindowError)
+  window.addEventListener('unhandledrejection', onUnhandledRej)
+  // 原生播放器退出时回调；挂在页面上而不是播放器组件上 ——
+  // 交接后播放器会被卸载，挂它身上会丢回调
+  window.__idolNativePlayerClosed = onNativePlayerClosed
+  narrowMq = window.matchMedia('(max-width: 768px)')
+  isNarrow.value = narrowMq.matches
+  narrowMq.addEventListener('change', syncNarrow)
   load()
   refreshHwAccel()
-  phoneMq = window.matchMedia('(max-width: 768px)')
-  onPhoneViewportChange()
-  phoneMq.addEventListener('change', onPhoneViewportChange)
 })
 
 onBeforeUnmount(() => {
-  phoneMq?.removeEventListener('change', onPhoneViewportChange)
-  phoneMq = null
+  narrowMq?.removeEventListener('change', syncNarrow)
+  window.removeEventListener('error', onWindowError)
+  window.removeEventListener('unhandledrejection', onUnhandledRej)
+  if (window.__idolNativePlayerClosed === onNativePlayerClosed) {
+    delete window.__idolNativePlayerClosed
+  }
   if (seekDebounceTimer !== null) {
     window.clearTimeout(seekDebounceTimer)
     seekDebounceTimer = null
@@ -1383,6 +1949,10 @@ onBeforeUnmount(() => {
   pingWatch({ playing: false })
   stopWatchPings()
   stopHeartbeat()
+  stopWindowPoll()
+  playing.value = false
+  mediaPaused.value = true
+  shouldAutoPlay.value = false
   const s = session.value
   if (s) void stopSession(s.session_id)
 })
@@ -1396,13 +1966,19 @@ watch(
     if (video.value && (video.value.uid === String(newId) || String(video.value.id) === String(newId))) {
       return
     }
+    // 切换后从头播放：不再记录上一段的播放秒数
     const s = session.value
     if (s) {
       pingWatch({ playing: false })
       stopWatchPings()
       stopHeartbeat()
+      stopWindowPoll()
       void stopSession(s.session_id)
     }
+    playing.value = false
+    mediaPaused.value = true
+    shouldAutoPlay.value = false
+    availableUntil.value = 0
     if (seekDebounceTimer !== null) {
       window.clearTimeout(seekDebounceTimer)
       seekDebounceTimer = null
@@ -1415,6 +1991,8 @@ watch(
     originalDecodeFailed = false
     transcodePromptShow.value = false
     lastKnownTime.value = 0
+    // 注意：不清空 stageMatrix —— 切机位时保留上一帧矩阵，
+    // 命中缓存会同步替换，避免右舱先闪成「暂无数据」再回来
     brokenThumbs.value = new Set()
     brokenRelatedThumbs.value = new Set()
     related.value = []
@@ -1444,6 +2022,8 @@ interface EditFormModel {
   artist_ids: number[]
   group_ids: number[]
   event_name: string
+  camera_angle: string | null
+  session_label: string
   performance_date: string | null
   release_date: string | null
   published_date: string | null
@@ -1466,6 +2046,8 @@ const editForm = ref<EditFormModel>({
   artist_ids: [],
   group_ids: [],
   event_name: '',
+  camera_angle: null,
+  session_label: '',
   performance_date: null,
   release_date: null,
   published_date: null,
@@ -1607,6 +2189,8 @@ function openEdit() {
     artist_ids: artistIds,
     group_ids: groupIds,
     event_name: v.event_name ?? '',
+    camera_angle: v.camera_angle ?? null,
+    session_label: v.session_label ?? '',
     performance_date: v.performance_date ?? null,
     release_date: v.release_date ?? null,
     published_date: v.published_date ?? null,
@@ -1659,6 +2243,9 @@ async function saveEdit() {
       group_ids: f.group_ids.length ? f.group_ids : null,
       song_id: f.tracks.find((t) => t.song_id != null)?.song_id || null,
       event_name: strOrNull(f.event_name),
+      camera_angle: f.camera_angle || null,
+      // 空串 = 交给后端按日期/活动名重算；非空 = 人工 override
+      session_label: f.session_label.trim(),
       performance_date: f.performance_date || null,
       release_date: f.release_date || null,
       published_date: f.published_date || null,
@@ -1684,99 +2271,8 @@ async function saveEdit() {
 }
 
 // ===== 资料字段 =====
-type MetaPart = { text: string; to?: string }
-type MetaRow = {
-  label: string
-  value?: string
-  mono?: boolean
-  parts?: MetaPart[]
-  // 移动端默认折叠的次要信息（视频格式/码率/文件名）
-  fold?: boolean
-}
+// 11 项档案网格已收纳进右侧「视频档案」舱（VideoInfoDock.vue），此处仅保留底部关联标签
 
-const metaFields = computed<MetaRow[]>(() => {
-  const v = video.value
-  if (!v) return []
-  const rows: MetaRow[] = []
-  const cast: MetaPart[] = []
-  for (const a of v.artists || []) {
-    cast.push({ text: a.chinese_name || a.name, to: a.uid ? artistPath(a.uid) : undefined })
-  }
-  for (const g of v.groups || []) {
-    cast.push({ text: g.chinese_name || g.name, to: g.uid ? groupPath(g.uid) : undefined })
-  }
-  if (cast.length) rows.push({ label: '艺人/组合', parts: cast })
-  const types = v.video_types && v.video_types.length ? v.video_types : v.video_type ? [v.video_type] : []
-  rows.push({ label: '视频类型', value: types.map((t) => VIDEO_TYPE_LABEL[t] || t).join(' / ') || '--' })
-  if (types.includes('CoverStage') && v.cover_from && v.cover_from.length) {
-    rows.push({ label: '翻唱自', value: v.cover_from.join(' / ') })
-  }
-  const songParts: MetaPart[] = (v.songs || [])
-    .map((s) => ({ text: s.chinese_name || s.name, to: s.uid ? songPath(s.uid) : undefined }))
-    .filter((p) => p.text)
-  if (songParts.length) {
-    rows.push({ label: '歌曲', parts: songParts })
-  } else {
-    const song = v.song_chinese_name || v.song_name
-    if (song) rows.push({ label: '歌曲', value: song })
-  }
-  if (v.performance_date) rows.push({ label: '演出日期', value: formatDate(v.performance_date) })
-  if (v.release_date) rows.push({ label: '发布日期', value: formatDate(v.release_date) })
-  const up: MetaPart[] = []
-  if (v.original_uploader) {
-    up.push({ text: v.original_uploader, to: `/uploaders/${encodeURIComponent(v.original_uploader)}` })
-  }
-  if (v.published_date) up.push({ text: formatDate(v.published_date) })
-  if (up.length) rows.push({ label: '博主/日期', parts: up })
-  if (v.event_name) rows.push({ label: '活动名称', value: v.event_name })
-  const fmt: string[] = []
-  const res = formatResolution(v.width, v.height)
-  if (res !== '--') fmt.push(res)
-  if (v.video_codec) fmt.push(v.video_codec)
-  if (v.audio_codec) fmt.push(v.audio_codec)
-  if (v.file_size) fmt.push(formatFileSize(v.file_size))
-  if (fmt.length) rows.push({ label: '视频格式', value: fmt.join(' · '), fold: true })
-  if (v.bitrate) rows.push({ label: '码率', value: formatBitrate(v.bitrate), mono: true, fold: true })
-  if (v.file_name) rows.push({ label: '文件名', value: v.file_name, mono: true, fold: true })
-  return rows
-})
-
-const tags = computed(() => {
-  const v = video.value
-  if (!v) return []
-  const list: string[] = []
-  if (v.video_type) list.push(VIDEO_TYPE_LABEL[v.video_type] || v.video_type)
-  for (const s of v.songs || []) list.push(s.chinese_name || s.name)
-  for (const a of v.artists || []) list.push(a.chinese_name || a.name)
-  for (const g of v.groups || []) list.push(g.chinese_name || g.name)
-  for (const al of v.albums || []) list.push(al.chinese_name || al.name)
-  for (const alias of v.aliases || []) list.push(alias)
-  return Array.from(new Set(list)).slice(0, 12)
-})
-
-// 移动端折叠：视频格式/码率/文件名与关联标签默认收起，点「展开详细信息」显示
-const detailsExpanded = ref(false)
-const visibleMetaFields = computed(() =>
-  phoneViewport.value && !detailsExpanded.value
-    ? metaFields.value.filter((r) => !r.fold)
-    : metaFields.value,
-)
-const hasFoldableMeta = computed(
-  () => metaFields.value.some((r) => r.fold) || tags.value.length > 0,
-)
-
-const metaDate = computed(() => {
-  const v = video.value
-  if (!v) return ''
-  const d = primaryDateRaw.value
-  return d ? formatDate(d) : ''
-})
-
-const primaryDateRaw = computed(() => {
-  const v = video.value
-  if (!v) return ''
-  return v.release_date || v.published_date || v.performance_date || ''
-})
 
 // ===== 侧栏艺人胶囊 =====
 const avatarPalettes = [
@@ -1816,7 +2312,7 @@ const relatedArtists = computed(() => {
       name: p.name,
       sub: '参与者',
       index: list.length,
-      avatar: p.id ? `/api/artists/${p.id}/avatar` : null,
+      avatar: p.id ? `/api/artists/${p.id}/avatar?w=96` : null,
     })
   }
   return list
@@ -1824,7 +2320,9 @@ const relatedArtists = computed(() => {
 
 function relatedAvatarUrl(item: { id: number | null; kind: 'artist' | 'group' }) {
   if (item.id === null) return ''
-  return item.kind === 'group' ? `/api/groups/${item.id}/avatar` : `/api/artists/${item.id}/avatar`
+  return item.kind === 'group'
+    ? `/api/groups/${item.id}/avatar?w=96`
+    : `/api/artists/${item.id}/avatar?w=96`
 }
 
 function goRelatedEntity(item: { uid?: string; kind: 'artist' | 'group' }) {
@@ -1841,7 +2339,7 @@ function goRelated(item: MusicVideoBrief) {
 </script>
 
 <template>
-  <div class="mv-page">
+  <div class="mv-page" :class="`mobile-seg-${mobileSegment}`">
     <SaHeader>
     </SaHeader>
     <div class="mv-container">
@@ -1852,66 +2350,86 @@ function goRelated(item: MusicVideoBrief) {
           <span class="hero-status-sub">记录不存在或已删除</span>
         </div>
       </div>
-      <div v-else-if="video" class="main-grid">
+      <div v-else-if="video" class="main-grid" @touchstart.passive="onMobileTouchStart" @touchend.passive="onMobileTouchEnd">
+        <!-- 背景动态环境光 -->
+        <div class="ambient ambient--a" aria-hidden="true" />
+        <div class="ambient ambient--b" aria-hidden="true" />
         <div class="main-col">
-          <!-- Hero Cover -->
+          <!-- Hero Cover：固定 16:9 横向画框（不随片源比例变形） -->
           <div
             class="hero-cover"
-            :class="{ 'hero-cover--portrait': portraitBox }"
             @mouseenter="onHeroEnter"
             @mouseleave="onHeroLeave"
             @click="onHeroTap"
+            @dblclick="onHeroDblClick"
           >
             <template v-if="hasSourceFile">
               <!-- 预播态：纯封面（不挂播放器）；唤出（armed）或播放后由播放器盖在封面之上 -->
               <img
-                v-if="poster"
+                v-if="displayedPoster"
                 v-show="!playerVisible"
-                :src="poster"
+                :src="displayedPoster"
                 :alt="video.name"
                 class="hero-img"
                 @error="onThumbError"
               />
-              <div v-if="!poster && !playerVisible" class="hero-placeholder">
+              <div v-if="!displayedPoster && !playerVisible" class="hero-placeholder">
                 <span class="hero-placeholder-play"><PlayArrowOutlined :size="26" /></span>
               </div>
               <div v-if="playerVisible" class="hero-player">
+                <!-- 外部承载：B 站官方 iframe。后端只在「本地无片源 + BV 可播」时下发 embed_url -->
+                <div v-if="externalPlay" class="bili-embed">
+                  <iframe
+                    :src="externalPlay.embedUrl"
+                    :title="video.name"
+                    class="bili-embed-frame"
+                    scrolling="no"
+                    frameborder="0"
+                    allow="autoplay; fullscreen; picture-in-picture"
+                    allowfullscreen
+                    referrerpolicy="no-referrer-when-downgrade"
+                  ></iframe>
+                  <a
+                    v-if="externalPlay.watchUrl"
+                    class="bili-embed-link"
+                    :href="externalPlay.watchUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >在 B 站打开</a>
+                </div>
+                <template v-else>
                 <VideoPlayer
                   ref="playerRef"
                   :sources="sources"
-                  :poster="poster"
+                  :poster="displayedPoster"
                   :active-label="playing ? activeLabel : ''"
                   :qualities="playing ? qualities : preQualities"
                   :active-quality="activeQuality"
-                  :play-mode-label="playing && session ? playModeLabel(session.play_mode) : ''"
+                  :play-mode-label="playing && session ? playModeLabel(session.play_mode, session.quality) : ''"
                   :play-mode-reason="playing && session ? session.decision_reason ?? '' : ''"
+                  :play-mode="playing && session ? session.play_mode : ''"
                   :restore-time="playing && session ? session.play_mode === 'direct_play' : false"
                   :buffering="playerBuffering"
                   :pending="!playing"
                   :duration="session?.source_duration || video.duration || 0"
                   :start-offset="session?.start_offset || 0"
                   :native-seek="session?.play_mode === 'direct_play'"
-                  :auto-play="true"
+                  :auto-play="shouldAutoPlay"
 :seek-into="seekInto"
 :available-until="availableUntil"
 :subtitles="subtitleTracks"
+:native-video-id="id"
+:native-title="video.name"
 @state="onPlayerState"
                   @timeupdate="onTimeUpdate"
                   @seeked="onSeeked"
                   @quality-select="selectQuality"
                   @play-request="startPlay"
+                  @native-handoff="onNativeHandoff"
                   @play="onPlayerPlay"
                   @pause="onPlayerPause"
                   @ended="onPlayerEnded"
                 />
-                <!-- 预播热区：唤出（armed）后出现，底部 58px 留给控制栏（画质/PlayToggle 仍可点）。
-                     PC 单击即播；移动端双击即播。一旦播放过不再出现，seek 跳转只显示「正在跳转…」 -->
-                <button
-                  v-if="playerArmed && !playing && !hasEverPlayed"
-                  class="hero-overlay"
-                  aria-label="播放"
-                  @click.stop="onHeroOverlayTap"
-                ></button>
                 <div v-if="playing && !sources.length" class="hero-empty">
                   <n-spin v-if="sessionLoading" size="small" />
                   <template v-else>
@@ -1925,12 +2443,13 @@ function goRelated(item: MusicVideoBrief) {
                   <n-spin size="small" />
                   <p>正在跳转…</p>
                 </div>
+                </template>
               </div>
             </template>
             <template v-else>
               <img
-                v-if="poster"
-                :src="poster"
+                v-if="displayedPoster"
+                :src="displayedPoster"
                 :alt="video.name"
                 class="hero-img"
                 @error="onThumbError"
@@ -1948,222 +2467,271 @@ function goRelated(item: MusicVideoBrief) {
                 </div>
               </div>
             </template>
+
+            <!-- 章节分段条 + 当前章节提示（叠播放器底部控制栏上方；保留播放器原生进度条） -->
+            <div
+              v-if="chapters.length && (session?.source_duration || video.duration)"
+              class="hero-chapters"
+            >
+              <div class="hero-chapter-hint mono">
+                <span v-if="activeChapterTitle" class="hero-chapter-name">{{ activeChapterTitle }}</span>
+                <span>{{ formatClock(lastKnownTime) }} / {{ formatClock(session?.source_duration || video.duration || 0) }}</span>
+              </div>
+              <ChapterSegmentBar
+                :chapters="chapters"
+                :current-time="lastKnownTime"
+                :duration="session?.source_duration || video.duration || 0"
+                @seek="jumpToChapter"
+              />
+            </div>
+          </div>
+
+          <!-- 播放器下方只保留播放模式；机位 + 画幅徽标已删除。 -->
+          <div v-if="playing && session" class="hero-meta-bar">
+            <span
+              class="mode-chip"
+              :class="{ 'is-transcode': session.play_mode === 'transcode' && session.quality !== 'original' }"
+              :title="session.decision_reason || playModeLabel(session.play_mode, session.quality)"
+            >
+              <span class="mode-dot" />
+              {{ playModeLabel(session.play_mode, session.quality) }}
+            </span>
           </div>
 
           <!-- 转码错误提示（画质选择已移入播放器控制栏齿轮菜单） -->
           <div v-if="playing && playerError" class="hero-error">{{ playerError }}</div>
 
-          <!-- Title -->
-          <h1 class="title">{{ video.name }}</h1>
-
-          <!-- Meta Row -->
-          <div class="meta-row">
-            <span v-if="metaDate" class="meta-sep" />
-            <span v-if="metaDate" class="meta-text">{{ metaDate }}</span>
-            <span v-if="video.duration" class="meta-sep" />
-            <span v-if="video.duration" class="meta-text">{{ formatDuration(video.duration) }}</span>
-            <template v-if="video.source_platform">
-              <span class="meta-sep" />
-              <a
-                v-if="video.source_url"
-                class="meta-text meta-link"
-                :href="video.source_url"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {{ video.source_platform }}
-              </a>
-              <span v-else class="meta-text">{{ video.source_platform }}</span>
-            </template>
-            <span v-if="video.published_date && video.published_date !== primaryDateRaw" class="meta-sep" />
-            <span v-if="video.published_date && video.published_date !== primaryDateRaw" class="meta-text mono">
-              {{ formatDate(video.published_date) }}
-            </span>
-            <div class="meta-actions">
+          <!-- 移动端标题信息卡（桌面隐藏） -->
+          <div class="v-m-header">
+            <h2 class="v-m-title">{{ video.name }}</h2>
+            <div class="v-m-actions">
               <button
-                class="btn-ghost btn-ghost--icon"
-                :class="{ 'btn-ghost--on': isCollected }"
-                title="收藏"
-                @click="collectOpen = !collectOpen"
+                v-if="mobileActor"
+                type="button"
+                class="v-m-actor"
+                @click="mobileActor.uid && goRelatedEntity(mobileActor)"
               >
-                <BookmarkFilled v-if="isCollected" />
-                <BookmarkOutlined v-else />
+                <img
+                  v-if="mobileActor.avatar && mobileActor.id"
+                  class="v-m-actor-avatar"
+                  :src="relatedAvatarUrl(mobileActor)"
+                  alt=""
+                />
+                <span v-else class="v-m-actor-avatar v-m-actor-avatar--empty" />
+                <span class="v-m-actor-text">
+                  <b>{{ mobileActor.name }}</b>
+                  <i>{{ mobileActor.sub }}</i>
+                </span>
               </button>
-              <VideoCollectPicker
-                v-if="collectOpen"
-                class="collect-pop"
-                :video="video"
-                @change="applyVideoMembership"
-              />
-              <button
-                v-if="scoreOverall !== null"
-                class="score-ring-btn"
-                :class="scoreClass(scoreOverall)"
-                :disabled="!video"
-                :title="`AI 评分（实验）：综合 ${scoreOverall}/10`"
-                @click="openScore"
-              >
-                <svg viewBox="0 0 36 36" width="24" height="24">
-                  <circle class="ring-track" cx="18" cy="18" r="15.5" />
-                  <circle
-                    class="ring-arc"
-                    cx="18"
-                    cy="18"
-                    r="15.5"
-                    :stroke-dasharray="ringDash"
-                    transform="rotate(-90 18 18)"
+
+              <div class="v-m-tools">
+                <!-- 分段切换：单个按钮，标签显示「另一个页面」，点一下互换 -->
+                <button
+                  type="button"
+                  class="v-m-switch"
+                  :aria-label="mobileSegment === 'cams' ? '切换到视频档案' : '切换到场次机位'"
+                  @click="mobileSegment = mobileSegment === 'cams' ? 'archive' : 'cams'"
+                >{{ mobileSegment === 'cams' ? '档案' : '场次' }}</button>
+
+                <!-- 与 PC 同一套图标按钮 -->
+                <div class="v-m-quick">
+                  <button
+                    class="btn-ghost btn-ghost--icon"
+                    :class="{ 'btn-ghost--on': isCollected }"
+                    title="收藏"
+                    @click="collectOpen = !collectOpen"
+                  >
+                    <BookmarkFilled v-if="isCollected" />
+                    <BookmarkOutlined v-else />
+                  </button>
+                  <VideoCollectPicker
+                    v-if="collectOpen"
+                    class="collect-pop"
+                    :video="video"
+                    @change="applyVideoMembership"
                   />
-                  <text class="ring-text" x="18" y="22">{{ scoreOverall }}</text>
-                </svg>
-              </button>
-              <button
-                v-else
-                class="btn-ghost btn-ghost--icon"
-                :disabled="!video"
-                title="AI 评分（实验）"
-                @click="openScore"
-              >
-                <StarOutlined />
-              </button>
-              <button class="btn-ghost btn-ghost--icon" :disabled="!video" title="编辑" @click="openEdit">
-                <EditOutlined />
-              </button>
-            </div>
-          </div>
-
-          <!-- Description -->
-          <div v-if="video.chinese_description || video.description" class="desc">
-            <div
-              class="desc-cn"
-              :class="{ 'desc-cn--clickable': hasOriginalDesc }"
-              @click="onDescClick"
-            >
-              {{ formatDesc(video.chinese_description || video.description) }}
-              <span
-                v-if="hasOriginalDesc"
-                class="desc-cn-arrow"
-                :class="{ 'desc-cn-arrow--open': showOriginal }"
-              >
-                ▾
-              </span>
-            </div>
-            <div v-if="showOriginal && hasOriginalDesc" class="desc-original">
-              {{ formatDesc(video.description) }}
-            </div>
-          </div>
-
-          <!-- Meta fields -->
-          <section class="section">
-            <div class="meta-grid">
-              <template v-for="row in visibleMetaFields" :key="row.label">
-                <div class="meta-label">{{ row.label }}</div>
-                <div v-if="row.parts" class="meta-value meta-value--parts">
-                  <template v-for="(part, pi) in row.parts" :key="pi">
-                    <router-link v-if="part.to" :to="part.to" class="meta-value--link">
-                      {{ part.text }}
-                    </router-link>
-                    <span v-else>{{ part.text }}</span>
-                    <span v-if="pi < row.parts.length - 1" class="meta-part-sep">·</span>
-                  </template>
+                  <button
+                    v-if="scoreOverall !== null"
+                    class="score-ring-btn"
+                    :class="scoreClass(scoreOverall)"
+                    :disabled="!video"
+                    :title="`AI 评分（实验）：综合 ${scoreOverall}/10`"
+                    @click="openScore"
+                  >
+                    <svg viewBox="0 0 36 36" width="24" height="24">
+                      <circle class="ring-track" cx="18" cy="18" r="15.5" />
+                      <circle class="ring-arc" cx="18" cy="18" r="15.5" :stroke-dasharray="ringDash" />
+                      <text class="ring-text" x="18" y="22">{{ scoreOverall }}</text>
+                    </svg>
+                  </button>
+                  <button
+                    v-else
+                    class="btn-ghost btn-ghost--icon"
+                    :disabled="!video"
+                    title="AI 评分（实验）"
+                    @click="openScore"
+                  >
+                    <StarOutlined />
+                  </button>
+                  <button class="btn-ghost btn-ghost--icon" :disabled="!video" title="编辑" @click="openEdit">
+                    <EditOutlined />
+                  </button>
                 </div>
-                <div v-else class="meta-value" :class="{ mono: row.mono }">{{ row.value }}</div>
-              </template>
+              </div>
             </div>
-            <button
-              v-if="phoneViewport && hasFoldableMeta"
-              type="button"
-              class="meta-toggle"
-              @click="detailsExpanded = !detailsExpanded"
-            >
-              {{ detailsExpanded ? '收起详细信息' : '展开详细信息' }}
-              <span class="meta-toggle-arrow" :class="{ 'meta-toggle-arrow--open': detailsExpanded }">▾</span>
-            </button>
-          </section>
+          </div>
 
-          <!-- Tags -->
-          <section v-if="tags.length && (detailsExpanded || !phoneViewport)" class="section">
-            <div class="section-title">关联标签</div>
-            <div class="tags">
-              <span
-                v-for="tag in tags"
-                :key="tag"
-                class="badge badge--neutral"
-              >
-                {{ tag }}
-              </span>
-            </div>
+          <!-- 视频档案：整体下沉到播放器下方；右侧只保留场次与机位 -->
+          <section class="info-below">
+            <VideoInfoDock
+              :video="video"
+              :session="session"
+              :artists="relatedArtists"
+              :title="video.name"
+              :description="video.description || ''"
+              :chinese-description="video.chinese_description || ''"
+              :wave="dockWave"
+              @go-entity="goRelatedEntity"
+            >
+              <template #actions>
+                <div class="title-actions">
+                    <button
+                      class="btn-ghost btn-ghost--icon"
+                      :class="{ 'btn-ghost--on': isCollected }"
+                      title="收藏"
+                      @click="collectOpen = !collectOpen"
+                    >
+                      <BookmarkFilled v-if="isCollected" />
+                      <BookmarkOutlined v-else />
+                    </button>
+                    <VideoCollectPicker
+                      v-if="collectOpen"
+                      class="collect-pop"
+                      :video="video"
+                      @change="applyVideoMembership"
+                    />
+                    <button
+                      v-if="scoreOverall !== null"
+                      class="score-ring-btn"
+                      :class="scoreClass(scoreOverall)"
+                      :disabled="!video"
+                      :title="`AI 评分（实验）：综合 ${scoreOverall}/10`"
+                      @click="openScore"
+                    >
+                      <svg viewBox="0 0 36 36" width="24" height="24">
+                        <circle class="ring-track" cx="18" cy="18" r="15.5" />
+                        <circle
+                          class="ring-arc"
+                          cx="18"
+                          cy="18"
+                          r="15.5"
+                          :stroke-dasharray="ringDash"
+                          transform="rotate(-90 18 18)"
+                        />
+                        <text class="ring-text" x="18" y="22">{{ scoreOverall }}</text>
+                      </svg>
+                    </button>
+                    <button
+                      v-else
+                      class="btn-ghost btn-ghost--icon"
+                      :disabled="!video"
+                      title="AI 评分（实验）"
+                      @click="openScore"
+                    >
+                      <StarOutlined />
+                    </button>
+                    <button class="btn-ghost btn-ghost--icon" :disabled="!video" title="编辑" @click="openEdit">
+                      <EditOutlined />
+                    </button>
+                </div>
+              </template>
+            </VideoInfoDock>
+
+
+
           </section>
         </div>
 
-        <!-- Sidebar -->
+        <!-- 右侧：只保留打歌期场次与机位，档案已下沉到播放器下方 -->
         <aside class="side-col">
-          <div v-if="related.length" class="side-block">
-            <div class="side-title">相关作品</div>
-            <div class="related-list">
-              <button
-                v-for="item in related"
-                :key="item.id"
-                class="related-item"
-                @click="goRelated(item)"
-              >
-                <div class="related-thumb">
-                  <img
-                    v-if="settings.showCovers && !brokenRelatedThumbs.has(item.id)"
-                    :src="musicVideosApi.thumbnailUrl(item.id, undefined, IMG_W_THUMB)"
-                    alt=""
-                    @error="onRelatedThumbError(item.id)"
-                  />
-                  <span v-else class="thumb-placeholder"><MovieOutlined :size="16" /></span>
-                </div>
-                <div class="related-info">
-                  <div class="related-title">{{ item.name }}</div>
-                  <div class="related-meta">
-                    {{ VIDEO_TYPE_LABEL[item.video_type] || item.video_type
-                    }}{{ item.duration ? ` · ${formatDuration(item.duration)}` : '' }}
-                  </div>
-                </div>
-              </button>
-            </div>
-          </div>
+          <div class="dock-shell">
+            <div>
+              <div class="dock-tabs">
+                <span class="dock-tab-label dock-tab-label--head">场次与机位</span>
+              </div>
 
-          <div v-if="relatedArtists.length" class="side-block">
-            <div class="side-title">相关艺人</div>
-            <div class="artist-list">
-              <button
-                v-for="a in relatedArtists"
-                :key="a.key"
-                class="artist-capsule"
-                :class="{ 'artist-capsule--link': !!a.uid }"
-                :disabled="!a.uid"
-                @click="a.uid && goRelatedEntity(a)"
-              >
-                <div class="artist-avatar" :style="avatarStyle(a.index)">
-                  <img
-                    v-if="a.avatar"
-                    class="artist-avatar-img"
-                    :src="relatedAvatarUrl(a)"
-                    alt=""
-                    loading="lazy"
+              <div class="dock-body">
+                <div class="dock-panel">
+                  <StageMatrixDock
+                    v-if="stageMatrix && stageMatrix.available"
+                    :matrix="stageMatrix"
+                    :wave="dockWave"
+                    @select="onStageSelect"
+                    @prefetch="prefetchPoster"
                   />
-                  <template v-else>{{ initialOf(a.name) }}</template>
+                  <div v-else class="dock-empty">该视频暂无打歌期场次数据</div>
                 </div>
-                <div class="artist-info">
-                  <div class="artist-name">{{ a.name }}</div>
-                  <div class="artist-sub">{{ a.sub }}</div>
-                </div>
-              </button>
+              </div>
             </div>
           </div>
-          <div v-if="chapters.length" class="side-block">
-            <div class="side-title">章节</div>
-            <ol class="chapter-list">
-              <li v-for="(c, i) in chapters" :key="i">
-                <button class="chapter-row" type="button" @click="jumpToChapter(c.time)">
-                  <span class="chapter-time mono">{{ formatDuration(c.time) }}</span>
-                  <span class="chapter-name">{{ c.title }}</span>
+          <!-- 相关作品 / 相关艺人：跟随场次机位放到右栏 -->
+          <div v-if="related.length || relatedPeople.length" class="rail-extra">
+            <details v-if="related.length" class="side-fold" open>
+              <summary>相关作品（{{ relatedShown.length }}）</summary>
+              <div class="related-list">
+                <button
+                  v-for="item in relatedShown"
+                  :key="item.id"
+                  class="related-item"
+                  @click="goRelated(item)"
+                >
+                  <div class="related-thumb">
+                    <img
+                      v-if="settings.showCovers && !brokenRelatedThumbs.has(item.id)"
+                      :src="musicVideosApi.thumbnailUrl(item.id, undefined, IMG_W_THUMB)"
+                      alt=""
+                      @error="onRelatedThumbError(item.id)"
+                    />
+                    <span v-else class="thumb-placeholder"><MovieOutlined :size="16" /></span>
+                  </div>
+                  <div class="related-info">
+                    <div class="related-title">{{ item.name }}</div>
+                    <div class="related-meta">
+                      {{ VIDEO_TYPE_LABEL[item.video_type] || item.video_type
+                      }}{{ item.duration ? ` · ${formatDuration(item.duration)}` : '' }}
+                    </div>
+                  </div>
                 </button>
-              </li>
-            </ol>
+              </div>
+            </details>
+
+            <details v-if="relatedPeople.length" class="side-fold" open>
+              <summary>相关艺人（{{ peopleShown.length }}）</summary>
+              <div class="artist-list">
+                <button
+                  v-for="(a, i) in peopleShown"
+                  :key="`${a.kind}-${a.id}`"
+                  class="artist-capsule"
+                  :class="{ 'artist-capsule--link': !!a.uid }"
+                  :disabled="!a.uid"
+                  @click="a.uid && goRelatedEntity({ uid: a.uid, kind: a.kind })"
+                >
+                  <div class="artist-avatar" :style="avatarStyle(i)">
+                    <img
+                      v-if="a.avatar_path"
+                      class="artist-avatar-img"
+                      :src="relatedAvatarUrl(a)"
+                      alt=""
+                      loading="lazy"
+                    />
+                    <template v-else>{{ initialOf(a.chinese_name || a.name) }}</template>
+                  </div>
+                  <div class="artist-info">
+                    <div class="artist-name">{{ a.chinese_name || a.name }}</div>
+                  </div>
+                </button>
+              </div>
+            </details>
           </div>
         </aside>
       </div>
@@ -2245,6 +2813,19 @@ function goRelated(item: MusicVideoBrief) {
             <n-form-item label="舞台 / 活动" class="col-2">
               <n-input v-model:value="editForm.event_name" placeholder="如 MBC Show! Music Core" />
             </n-form-item>
+            <n-form-item label="机位">
+              <SaSelect
+                v-model="editForm.camera_angle"
+                :options="CAMERA_ANGLE_OPTIONS"
+                placeholder="留空 = 未标注"
+              />
+            </n-form-item>
+            <n-form-item label="场次">
+              <n-input
+                v-model:value="editForm.session_label"
+                placeholder="YYMMDD - 活动名（留空自动生成）"
+              />
+            </n-form-item>
             <n-form-item label="曲目" class="col-2">
               <VideoTrackList
                 :tracks="editForm.tracks"
@@ -2298,6 +2879,48 @@ function goRelated(item: MusicVideoBrief) {
               </span>
             </div>
             <n-button size="small" @click="coverPickerShow = true">选择封面</n-button>
+          </div>
+
+          <!-- B 站播放源：原详情页右栏那一块，收进编辑弹窗（业主 2026-11-13） -->
+          <div v-if="video" class="relocate-block">
+            <div class="relocate-head">
+              <span class="relocate-title">B 站播放源</span>
+              <span class="cover-state">
+                {{ video.publish ? publishStatusLabel(video.publish.status) : '未绑定' }}
+              </span>
+            </div>
+            <div class="bili-bind">
+              <div v-if="video.publish?.bvid" class="bili-bind-current">
+                <a
+                  :href="video.publish.watch_url || '#'"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="bili-bind-bv"
+                >{{ video.publish.bvid }}<span v-if="(video.publish.page || 1) > 1"> · P{{ video.publish.page }}</span></a>
+                <span class="bili-bind-origin">{{ publishOriginLabel(video.publish.origin) }}</span>
+                <button class="btn-ghost bili-bind-unlink" @click="unbindBili">解绑</button>
+              </div>
+              <div class="bili-bind-input">
+                <n-input
+                  v-model:value="biliInput"
+                  size="small"
+                  clearable
+                  placeholder="粘贴 B 站视频地址或 BV 号"
+                  @keyup.enter="saveBili"
+                />
+                <n-button
+                  size="small"
+                  type="primary"
+                  :loading="biliSaving"
+                  :disabled="!biliInput.trim()"
+                  @click="saveBili"
+                >绑定</n-button>
+              </div>
+              <p class="bili-bind-hint">
+                绑定后，在线版（没有本地文件的镜像站点）会用 B 站 iframe 播放这个视频。
+                只接受公开且可播放的稿件；被锁定的稿件请先解绑再换一个。
+              </p>
+            </div>
           </div>
 
           <!-- 更改存储路径（高危，默认折叠）：入库时选错目录（如落在 unknown）可在此移动文件；
@@ -2433,16 +3056,291 @@ function goRelated(item: MusicVideoBrief) {
 </template>
 
 <style scoped>
+/* 统一弹簧曲线（复刻设计稿 --spring） */
 .mv-page {
+  --spring: cubic-bezier(0.16, 1, 0.3, 1);
   min-height: 100vh;
   background: var(--sa-bg);
   color: var(--sa-text-primary);
   -webkit-font-smoothing: antialiased;
 }
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* 背景动态环境光（accent 弱光晕，纯装饰） */
+.main-grid {
+  position: relative;
+}
+.ambient {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(120px);
+  pointer-events: none;
+  z-index: 0;
+}
+.ambient--a {
+  top: -60px;
+  left: 6%;
+  width: 520px;
+  height: 320px;
+  background: color-mix(in oklab, var(--sa-accent) 13%, transparent);
+}
+.ambient--b {
+  top: 260px;
+  right: 2%;
+  width: 420px;
+  height: 280px;
+  background: color-mix(in oklab, var(--sa-accent) 9%, transparent);
+}
+.main-col,
+.side-col {
+  position: relative;
+  z-index: 1;
+}
+
+/* ===== 播放器下方信息条（仅播放模式）===== */
+.hero-meta-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  min-height: 26px;
+}
+/* 播放模式：绿点=直连，黄点=转码；常驻可读，悬停看完整原因 */
+.mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--sa-text-secondary);
+  background: var(--sa-subtle);
+  border: 1px solid var(--sa-border-subtle);
+  cursor: default;
+  white-space: nowrap;
+}
+.mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: #22c55e;
+  box-shadow: 0 0 0 2px color-mix(in oklab, #22c55e 22%, transparent);
+}
+.mode-chip.is-transcode .mode-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px color-mix(in oklab, #f59e0b 22%, transparent);
+}
+
+/* ===== 章节分段条（叠播放器底部） ===== */
+.hero-chapters {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 62px;
+  z-index: 6;
+  pointer-events: none;
+}
+.hero-chapter-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.88);
+  margin-bottom: 6px;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+}
+.hero-chapter-name {
+  color: color-mix(in oklab, var(--sa-accent) 60%, #fff);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hero-chapters :deep(.chapter-bar) {
+  pointer-events: auto;
+}
+
+.type-chip {
+  padding: 2px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--sa-accent);
+  background: var(--sa-accent-subtle);
+}
+.meta-strong {
+  color: var(--sa-text-primary);
+  font-weight: 600;
+}
+.title-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+/* 艺人/组合双联胶囊已移入 VideoInfoDock（档案舱顶部） */
+
+/* ===== 播放器下方的视频档案（无卡片外框，与老版一样直接铺在页面上）===== */
+.info-below {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+/* ===== 右侧控制中枢外壳 ===== */
+.side-col {
+  min-width: 0;
+}
+.dock-shell {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  height: 100%;
+  padding: 20px 22px 18px;
+  border-radius: 16px;
+  /* 「苹果系物理微光层」：发丝级边框 + 三层复合微阴影。
+     旧的 26px 大圆角 + 6% 描边 + 单层 hover 阴影在同色底上会显得「厚」且边缘发灰，
+     换成 16px 圆角 + 5% 发丝边 + 微光阴影后，轮廓是收敛的一条线，卡片是通透的。 */
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-hairline);
+  box-shadow: var(--sa-shadow-premium);
+}
+/* 方案 I：下划线式双 Tab —— 无胶囊底板，只有 1px 基线与滑动下划线 */
+.dock-tabs {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  gap: 22px;
+  padding-bottom: 14px;
+  margin-bottom: 0;
+  /* 卡片内的分区线：用最淡的一档，别在纯白卡上再压一条深线 */
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.dock-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 0 10px;
+  margin-bottom: -11px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--sa-text-tertiary);
+  transition: color 0.3s ease;
+}
+.dock-tab::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0;
+  height: 1.5px;
+  background: var(--sa-text-primary);
+  transition: width 0.4s var(--spring);
+}
+.dock-tab--active::after {
+  width: 100%;
+}
+.dock-tab:hover:not(.dock-tab--active) {
+  color: var(--sa-text-secondary);
+}
+.dock-tab--active {
+  color: var(--sa-text-primary);
+}
+.dock-tabs-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dock-tab-no {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0.75;
+}
+.dock-tab-label {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+/* 右舱只剩一个静态标题（不再有 Tab 切换）：按常规模块标题排，不再用大写字距 */
+.dock-tab-label--head {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--sa-text-primary);
+}
+.dock-tab--active .dock-tab-label {
+  font-weight: 700;
+}
+.dock-tabs-tag {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--sa-text-tertiary);
+  opacity: 0.75;
+}
+.dock-body {
+  min-width: 0;
+  padding-top: 16px;
+}
+.dock-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.dock-empty {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--sa-text-tertiary);
+}
+
+@media (min-width: 1024px) {
+  .side-col {
+    position: sticky;
+    top: 12px;
+  }
+}
+@media (max-width: 768px) {
+  .title-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+  .hero-chapters {
+    left: 10px;
+    right: 10px;
+    bottom: 56px;
+  }
+  .bio-card {
+    flex-direction: column;
+  }
+}
 .mv-container {
-  max-width: 1280px;
+  /* 与顶栏品牌同宽：不设 max-width，左右只保留 --sa-gutter，
+     和 logo / 导航的边界对齐，不再额外居中留白。 */
+  max-width: none;
   margin: 0 auto;
-  padding: 24px 32px 48px;
+  /* 顶栏 77px 之后不再额外留大间距，只留一条呼吸线 */
+  padding: 12px var(--sa-gutter, 36px) 48px;
 }
 @media (max-width: 768px) {
   .mv-container {
@@ -2455,6 +3353,46 @@ function goRelated(item: MusicVideoBrief) {
   .mv-container .hero-cover {
     border-radius: 0;
     margin: 0 -16px 16px;
+  }
+
+  /* 移动端视频档案：不要外层的白卡框，面板直接落在页面底色上 */
+  .dock-shell {
+    /* 桌面用 height:100% 与左列等高；移动端单列时这个 100% 会撑出一大块空白，
+       把下面的「相关作品/相关艺人」顶到很下面去，所以必须回到内容高度。 */
+    height: auto;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  /* 档案已下沉到播放器下方：移动端收紧顶部间距 */
+  .info-below {
+    margin-top: 8px;
+  }
+  /* 右栏推荐移动端同样不要白卡框 */
+  .rail-extra {
+    margin-top: 12px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  /* 窄屏保持原尺寸，避免缩略图把标题挤没 */
+  .rail-extra .related-thumb {
+    width: 84px;
+    height: 52px;
+  }
+  .rail-extra .artist-avatar {
+    width: 44px;
+    height: 44px;
+    font-size: 17px;
+  }
+  /* 没有卡片框之后，tab 下面那条通栏基线会变成一条孤立的线，一并去掉；
+     当前 tab 仍有自己的下划线，状态不受影响 */
+  .dock-tabs {
+    border-bottom: none;
   }
 }
 
@@ -2481,12 +3419,7 @@ function goRelated(item: MusicVideoBrief) {
   border-radius: 9999px;
 }
 .meta-actions {
-  margin-left: auto;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
+  display: none;
 }
 .collect-pop {
   position: absolute;
@@ -2514,7 +3447,11 @@ function goRelated(item: MusicVideoBrief) {
 }
 @media (min-width: 1024px) {
   .main-grid {
-    grid-template-columns: 1fr 320px;
+    /* 按比例分栏（约 1.8 : 1），而不是固定像素：
+       窄窗口时右侧不会突然占掉近一半；右栏给 320px 下限保底。 */
+    grid-template-columns: minmax(0, 1.8fr) minmax(320px, 1fr);
+    gap: 24px;
+    align-items: start;
   }
 }
 
@@ -2522,30 +3459,16 @@ function goRelated(item: MusicVideoBrief) {
 .hero-cover {
   position: relative;
   aspect-ratio: 16 / 9;
-  border-radius: 12px;
+  border-radius: 24px;
   overflow: hidden;
   background: var(--sa-subtle);
-  margin-bottom: 24px;
+  margin-bottom: 0;
+  box-shadow:
+    0 28px 75px -15px rgba(0, 0, 0, 0.28),
+    0 0 0 1px var(--sa-border-subtle);
 }
-/* 手机竖屏片（B 站式）：盒子是一个「铺满全宽 + 视口高度 58%」的黑色画框，
- * 竖屏画面在里面 contain 居中 → 左右自然留出黑边（9:16 在 390×844 上实测各约 57px），
- * 页面占用从 ~82%（636px）降到 58%（490px）。
- * - 尺寸只由「是不是竖屏片」决定，**不随播放/暂停/换源变化** → 不再整页跳变；
- * - 用**确定高度**而不是 aspect-ratio：基础规则是 16/9，竖屏时若继续用 aspect-ratio，
- *   一旦 max-height 生效，Chrome 会把高度上限「反向传递」压窄宽度 —— 实测盒子只剩
- *   275px 宽、右侧漏出页面背景，黑边就跑到播放器外面去了。必须 aspect-ratio: auto
- *   让宽度回到块级布局（auto 宽 + 移动端 .hero-cover 的负外边距 = 铺满全宽 390px）；
- * - 高度用 svh（小视口高度）而非 dvh：滚动时地址栏收缩不改变 svh，播放器高度不抖动。 */
-.hero-cover--portrait {
-  aspect-ratio: auto;
-  height: 58vh;   /* 老浏览器兜底（不认识 svh 时用这条） */
-  height: 58svh;  /* 动态视口安全单位：不随地址栏伸缩变化 */
-  background: #000;
-}
-/* 封面同样 contain：竖屏缩略图不被裁切，黑边从封面阶段就在，避免开播瞬间画面"变胖" */
-.hero-cover--portrait .hero-img {
-  object-fit: contain;
-}
+/* 播放器画框固定 16:9：竖屏片也放进同一个横向框（画面 contain 居中、左右留黑边），
+   不再按片源比例把整块变成竖的 —— 那会让页面高度来回跳、切场次时机位矩阵被推走。 */
 .hero-img {
   width: 100%;
   height: 100%;
@@ -2574,21 +3497,41 @@ function goRelated(item: MusicVideoBrief) {
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
-.hero-overlay {
-  position: absolute;
-  /* 底部留出自定义进度条 + 原生控制栏区域，避免遮挡 */
-  inset: 0 0 58px 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  /* 透明全屏点击热区：待播时点画面任意处即开始播放。
-   * 播放锚点回归控制栏 PlayToggle，不再叠加页面级浮动按钮，避免视觉语言冲突 */
-}
-
 .hero-player {
   position: relative;
   width: 100%;
   height: 100%;
+}
+/* B 站 iframe 承载：铺满 hero-cover，由 B 站播放器自己按片源比例留黑边 */
+.bili-embed {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+.bili-embed-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+/* 外链兜底：iframe 内部的「打开APP」在桌面端常常点不动，给一个明确出口 */
+.bili-embed-link {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  text-decoration: none;
+}
+.bili-embed-link:hover {
+  background: rgba(0, 0, 0, 0.75);
 }
 .hero-empty {
   position: absolute;
@@ -2669,7 +3612,7 @@ function goRelated(item: MusicVideoBrief) {
 }
 
 .hero-error {
-  margin: -12px 0 16px;
+  margin: 12px 0 0;
   padding: 8px 14px;
   border-radius: 8px;
   font-size: 13px;
@@ -2690,76 +3633,8 @@ function goRelated(item: MusicVideoBrief) {
   word-break: break-word;
 }
 
-/* ===== Title ===== */
-.title {
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.3;
-  color: var(--sa-text-primary);
-  margin: 0 0 12px;
-}
-@media (max-width: 768px) {
-  .title {
-    font-size: 20px;
-  }
-}
 
-/* ===== Meta Row ===== */
-.meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 20px;
-}
-.meta-sep {
-  width: 1px;
-  height: 14px;
-  background: var(--sa-border);
-}
-.meta-text {
-  font-size: 14px;
-  color: var(--sa-text-secondary);
-}
-.meta-link {
-  color: var(--sa-accent);
-  text-decoration: none;
-  transition: color 0.15s;
-}
-.meta-link:hover {
-  color: var(--sa-accent-hover);
-  text-decoration: underline;
-}
-.meta-text.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-}
-
-/* ===== Badge ===== */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 10px;
-  font-size: 12px;
-  font-weight: 500;
-  border-radius: 9999px;
-  line-height: 1.5;
-}
-.badge--neutral {
-  color: var(--sa-text-secondary);
-  background: var(--sa-subtle);
-}
-
-/* ===== Description ===== */
-.desc {
-  font-size: 15px;
-  line-height: 1.7;
-  color: var(--sa-text-secondary);
-  margin-bottom: 32px;
-  white-space: pre-wrap;
-}
+/* ===== Description（简介抽屉内） ===== */
 .desc-cn--clickable {
   cursor: pointer;
 }
@@ -2784,108 +3659,139 @@ function goRelated(item: MusicVideoBrief) {
   color: var(--sa-text-tertiary);
 }
 
-/* ===== Section ===== */
-.section {
-  margin-bottom: 40px;
-}
-.section-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--sa-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: 16px;
-}
+/* ===== Section（简介抽屉内的描述文字） ===== */
 
-/* ===== Meta grid ===== */
-.meta-grid {
-  display: grid;
-  grid-template-columns: 110px 1fr;
-  gap: 12px 16px;
-  font-size: 14px;
-}
-.meta-label {
-  color: var(--sa-text-tertiary);
-  font-size: 12px;
-  padding-top: 1px;
-}
-.meta-value {
-  color: var(--sa-text-primary);
-}
-.meta-value.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-}
-.meta-value--link {
-  color: var(--sa-accent);
-  cursor: pointer;
-  text-decoration: none;
-  transition: opacity 0.15s;
-}
-.meta-value--link:hover {
-  opacity: 0.8;
-  text-decoration: underline;
-}
-.meta-value--parts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  row-gap: 2px;
-}
-.meta-part-sep {
-  margin: 0 6px;
-  color: var(--sa-text-tertiary);
-}
-.meta-toggle {
-  margin-top: 16px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  font-size: 13px;
-  color: var(--sa-text-secondary);
-  background: var(--sa-subtle);
-  border: none;
-  border-radius: 9999px;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-.meta-toggle:active {
-  opacity: 0.75;
-}
-.meta-toggle-arrow {
-  font-size: 11px;
-  display: inline-block;
-  transition: transform 0.2s ease;
-}
-.meta-toggle-arrow--open {
-  transform: rotate(180deg);
-}
-
-/* ===== Tags ===== */
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-/* ===== Sidebar ===== */
-.side-col {
+/* ===== Sidebar：双 Tab 控制舱 ===== */
+/* ===== 右栏推荐：相关作品 / 相关艺人 =====
+   按 `pro-card` 语言拆成两张独立卡片（原先挤在一个 26px 大圆角外框里，
+   两个折叠标题叠在同一个白块上，层次是糊的）。外框退化成纯布局容器。 */
+.rail-extra {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 18px;
+  margin-top: 18px;
 }
-.side-block {
-  min-width: 0;
+.rail-extra .side-fold {
+  margin: 0;
+  padding: 18px 20px 16px;
+  border: 1px solid var(--sa-hairline);
+  border-radius: 16px;
+  background: var(--sa-elevated);
+  box-shadow: var(--sa-shadow-premium);
 }
-.side-title {
+.rail-extra .side-fold:first-child {
+  padding-top: 18px;
+}
+.rail-extra .side-fold + .side-fold {
+  margin-top: 0;
+}
+.rail-extra .side-fold > summary {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--sa-text-primary);
+}
+.rail-extra .side-fold[open] > summary {
+  margin-bottom: 12px;
+}
+.rail-extra .related-thumb {
+  width: 106px;
+  height: 62px;
+  border-radius: 8px;
+}
+.rail-extra .related-thumb img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.rail-extra .artist-avatar {
+  width: 44px;
+  height: 44px;
+  font-size: 17px;
+}
+/* 作品标题最多两行，长标题按词换行，不再被压成一行 */
+.rail-extra .related-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+  max-height: 2.8em;
+}
+.rail-extra .related-meta {
+  font-size: 11px;
+}
+.side-fold {
+  border-top: 1px solid var(--sa-border-subtle);
+  padding-top: 12px;
+}
+.side-fold summary {
+  cursor: pointer;
   font-size: 12px;
   font-weight: 500;
   color: var(--sa-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  margin-bottom: 12px;
+  list-style: none;
+  outline: none;
 }
+.side-fold summary::-webkit-details-marker {
+  display: none;
+}
+.side-fold[open] summary {
+  margin-bottom: 10px;
+}
+
+/* ===== B 站播放源绑定（P0 在线版） ===== */
+.bili-bind {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bili-bind-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bili-bind-bv {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--sa-accent);
+  text-decoration: none;
+}
+.bili-bind-bv:hover {
+  text-decoration: underline;
+}
+.bili-bind-origin {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--sa-text-tertiary);
+  background: var(--sa-subtle);
+}
+.bili-bind-unlink {
+  margin-left: auto;
+  font-size: 12px;
+}
+.bili-bind-input {
+  display: flex;
+  gap: 8px;
+}
+.bili-bind-input :deep(.n-input) {
+  flex: 1;
+}
+.bili-bind-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--sa-text-tertiary);
+}
+
+/* 主列艺人双联胶囊见 .cast-pill（折叠区内沿用纵向 .artist-list） */
 .related-list {
   display: flex;
   flex-direction: column;
@@ -2895,28 +3801,36 @@ function goRelated(item: MusicVideoBrief) {
   display: flex;
   gap: 12px;
   padding: 8px;
-  border-radius: 8px;
+  border-radius: 10px;
   text-align: left;
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background 0.2s;
+  /* 卡片内的行悬停：3.5% 主色 ≈ 纸上一道极浅的灰，比纯 --sa-subtle 更轻 */
+  transition: background-color 0.2s ease;
 }
 .related-item:hover {
-  background: var(--sa-subtle);
+  background: color-mix(in oklab, var(--sa-text-primary) 3.5%, transparent);
 }
 .related-thumb {
   width: 80px;
   height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 6px;
   overflow: hidden;
   flex-shrink: 0;
   background: var(--sa-subtle);
 }
+/* 封面有 16:9（官方缩略图）也有 9:16（竖版直拍截帧）：
+   固定槽位 + contain 等比内缩，保证整张封面露出来，不再被 cover 裁成一条 */
 .related-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
   display: block;
 }
 .thumb-placeholder {
@@ -2959,7 +3873,7 @@ function goRelated(item: MusicVideoBrief) {
   padding: 8px;
   border: none;
   background: none;
-  border-radius: 8px;
+  border-radius: 10px;
   text-align: left;
   width: 100%;
   font: inherit;
@@ -2969,10 +3883,10 @@ function goRelated(item: MusicVideoBrief) {
 }
 .artist-capsule--link {
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background-color 0.2s ease;
 }
 .artist-capsule--link:hover {
-  background: var(--sa-hover);
+  background: color-mix(in oklab, var(--sa-text-primary) 3.5%, transparent);
 }
 .artist-avatar {
   width: 40px;
@@ -3255,48 +4169,447 @@ function goRelated(item: MusicVideoBrief) {
   color: var(--sa-text-secondary);
 }
 
-.chapter-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.chapter-row {
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
-  width: 100%;
-  padding: 7px 10px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--sa-text-secondary);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.chapter-row:hover {
-  background: var(--sa-hover);
-  color: var(--sa-text-primary);
-}
-.chapter-time {
-  color: var(--sa-accent);
-  font-variant-numeric: tabular-nums;
-}
-.chapter-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .relocate-hint {
   margin-top: 8px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--sa-text-tertiary);
 }
+
+
+/* ================= 移动端设计稿（2026-11-13）：标题卡 + 双分段 Pager ================= */
+.v-m-header {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mv-page {
+    min-height: 100vh;
+    background: var(--sa-bg);
+    color: var(--sa-text-primary);
+  }
+  .mv-container {
+    padding: 0 0 16px;
+    background: var(--sa-bg);
+  }
+  .main-grid {
+    display: block;
+    gap: 0;
+  }
+  .ambient {
+    display: none;
+  }
+  .main-col,
+  .side-col {
+    width: 100%;
+  }
+  /* 收藏浮层在 .main-col 里，右栏同为 z-index:1 且排在后面会盖住它 —— 把左栏提一层 */
+  .main-col {
+    z-index: 3;
+  }
+  .hero-cover {
+    margin: 0;
+    border-radius: 0;
+  }
+  .hero-meta-bar {
+    display: none;
+  }
+
+  /* --- 标题信息卡 --- */
+  .v-m-header {
+    display: block;
+    padding: 16px 16px 14px;
+    background: var(--sa-elevated);
+    border-bottom: 1px solid var(--sa-border-subtle);
+  }
+  .v-m-title {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.35;
+    color: var(--sa-text-primary);
+  }
+  .v-m-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .v-m-actor {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .v-m-actor-avatar {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #1c1f26;
+  }
+  .v-m-actor-avatar--empty {
+    display: inline-block;
+  }
+  .v-m-actor-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .v-m-actor-text b {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--sa-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .v-m-actor-text i {
+    font-style: normal;
+    font-size: 10px;
+    color: var(--sa-text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 右侧工具组：分段开关 + 图标按钮 */
+  .v-m-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+  }
+  .v-m-switch {
+    display: inline-flex;
+    align-items: center;
+    flex: none;
+    height: 28px;
+    padding: 0 11px;
+    border: 1px solid var(--sa-border-subtle);
+    border-radius: 999px;
+    background: var(--sa-subtle);
+    color: var(--sa-text-secondary);
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.18s ease, background-color 0.18s ease;
+  }
+  .v-m-switch:hover {
+    color: var(--sa-text-primary);
+  }
+  .v-m-quick {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+  }
+  .v-m-quick .btn-ghost--icon {
+    width: 30px;
+    height: 30px;
+  }
+  .v-m-quick .collect-pop {
+    top: 38px;
+    right: 0;
+  }
+
+  /* --- 两页内容切换：场次机位内部逻辑完全不动 --- */
+  .mobile-seg-cams .info-below,
+  .mobile-seg-cams .rail-extra {
+    display: none !important;
+  }
+  .mobile-seg-archive .dock-shell {
+    display: none !important;
+  }
+  .mobile-seg-archive .side-col {
+    height: auto;
+  }
+  .dock-shell {
+    height: auto;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* --- 场次机位：和档案页同一块白色版面（无卡片、无灰底） ---
+     内容只有两三条时，白色必须铺满整屏，否则下方会剩一大块灰底。 */
+  .mv-page.mobile-seg-cams,
+  .mobile-seg-cams .mv-container {
+    background: var(--sa-elevated);
+  }
+  .mobile-seg-cams .side-col {
+    padding: 0 16px 12px;
+    background: var(--sa-elevated);
+  }
+  /* 留白原来叠了三层：shell 16 + body 22 + sheet 12 = 50px，全部归零 */
+  .mobile-seg-cams .dock-body {
+    padding-top: 0;
+  }
+  .mobile-seg-cams :deep(.stage-sheet) {
+    gap: 0;
+    padding-top: 0;
+  }
+  /* 分栏标签行（打歌舞台 / 官方影像 / 粉丝直拍）——只给外层 .block-head 一次内边距 */
+  .mobile-seg-cams :deep(.block-head) {
+    padding: 12px 0 8px;
+  }
+  /* 机位行由卡片改为细线分隔的行 */
+  .mobile-seg-cams :deep(.cam-list) {
+    gap: 0;
+  }
+  .mobile-seg-cams :deep(.cam-item) {
+    position: relative;
+    padding: 11px 0;
+    border: 0;
+    border-top: 1px solid var(--sa-border-subtle);
+    border-radius: 0;
+    background: transparent;
+  }
+  .mobile-seg-cams :deep(.cam-item:first-child) {
+    border-top: 0;
+  }
+  .mobile-seg-cams :deep(.cam-item:hover),
+  .mobile-seg-cams :deep(.cam-item.is-active) {
+    background: transparent;
+    border-color: var(--sa-border-subtle);
+  }
+  /* 正在播放：左侧一道短竖线 + 原有的声波动画 */
+  .mobile-seg-cams :deep(.cam-item.is-active)::before {
+    content: '';
+    position: absolute;
+    left: -9px;
+    top: 50%;
+    width: 2px;
+    height: 18px;
+    margin-top: -9px;
+    border-radius: 2px;
+    background: var(--sa-text-primary);
+  }
+  /* 场次选择器改成一行字段，不再是一张卡 */
+  .mobile-seg-cams :deep(.sp-trigger) {
+    padding: 12px 0;
+    border: 0;
+    border-top: 1px solid var(--sa-border-subtle);
+    border-bottom: 1px solid var(--sa-border-subtle);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .mobile-seg-cams :deep(.sp-trigger:hover),
+  .mobile-seg-cams :deep(.sp-trigger.is-sheet) {
+    border-color: var(--sa-border-subtle);
+  }
+  .dock-tabs {
+    border: 0;
+    padding: 0 0 12px;
+  }
+  .dock-tab-label--head {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--sa-text-primary);
+    letter-spacing: 0;
+  }
+  .dock-empty {
+    padding: 16px;
+    border: 1px solid var(--sa-border-subtle);
+    border-radius: 10px;
+    background: var(--sa-subtle);
+    color: var(--sa-text-secondary);
+    font-size: 12px;
+  }
+
+  /* --- 档案页：与标题栏、分段栏连成一片 ---
+     业主 2026-11-13：上方分段是方角、下面卡片是圆角，交界处会露角。
+     解法是**不做卡片**——标题栏 / 分段栏 / 档案区同属一块白色版面，
+     内部只用 1px 细线分节，没有任何外框与圆角。 */
+  .info-below {
+    margin: 0;
+    padding: 0 16px 6px;
+    gap: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--sa-elevated);
+  }
+  .info-below :deep(.dossier) {
+    gap: 0;
+    color: var(--sa-text-primary);
+  }
+  .info-below :deep(.dossier-title-row) {
+    display: none;
+  }
+  .info-below :deep(.dossier-head) {
+    margin: 0;
+    padding: 14px 0 12px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .info-below :deep(.ds-ledger) {
+    margin: 0;
+    padding: 2px 0 6px;
+    border: 0;
+    border-top: 1px solid var(--sa-border-subtle);
+    background: transparent;
+  }
+  .info-below :deep(.ds-file) {
+    margin: 0;
+    padding: 13px 0 14px;
+    border: 0;
+    border-top: 1px solid var(--sa-border-subtle);
+    border-radius: 0;
+    background: transparent;
+  }
+  /* 文件名不再单套内框，跟账本同一条竖线排下去 */
+  .info-below :deep(.ds-file-name) {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  /* 播放源 / 关联标签同属这块版面，只留分隔线 */
+  .info-below .side-fold {
+    margin: 0;
+    padding: 13px 0 14px;
+    border: 0;
+    border-top: 1px solid var(--sa-border-subtle);
+  }
+  .info-below :deep(.dossier-desc),
+  .info-below :deep(.ds-value),
+  .info-below :deep(.dossier-title) {
+    color: var(--sa-text-primary);
+  }
+  .info-below :deep(.ds-label) {
+    color: var(--sa-text-secondary);
+  }
+  .info-below :deep(.ds-row) {
+    border-color: var(--sa-border-subtle);
+    /* 手机窄：标签列从 112 收到 92，值列多出 24px，长场次/母带规格不再折行 */
+    gap: 12px;
+  }
+  .info-below :deep(.ds-label) {
+    flex-basis: 92px;
+  }
+  .side-fold {
+    border-color: var(--sa-border-subtle);
+  }
+  .side-fold > summary {
+    color: var(--sa-text-primary);
+  }
+  /* 推荐区接在档案白版面后面，不再是一张张白卡。
+     PC 端把每个 side-fold 做成了独立卡片，手机上全部退回「无框 + 细线分节」。 */
+  .rail-extra {
+    display: block;
+    margin-top: 0;
+    padding: 4px 16px 14px;
+    border: 0;
+    border-radius: 0;
+    background: var(--sa-elevated);
+    box-shadow: none;
+  }
+  .rail-extra .side-fold {
+    margin: 0;
+    padding: 13px 0 14px;
+    border: 0;
+    border-top: 1px solid var(--sa-border-subtle);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .rail-extra .side-fold:first-child {
+    padding-top: 4px;
+    border-top: 0;
+  }
+  .rail-extra .side-fold > summary {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+  .rail-extra .side-fold[open] > summary {
+    margin-bottom: 8px;
+  }
+  .rail-extra .related-list,
+  .rail-extra .artist-list {
+    gap: 0;
+  }
+  .rail-extra .related-item,
+  .rail-extra .artist-capsule {
+    padding: 10px 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--sa-text-primary);
+  }
+  .rail-extra .related-list > .related-item:first-child {
+    border-top: 0;
+  }
+  .rail-extra .related-item + .related-item,
+  .rail-extra .artist-capsule + .artist-capsule {
+    border-top: 1px solid var(--sa-border-subtle);
+  }
+  .rail-extra .related-item:hover,
+  .rail-extra .artist-capsule--link:hover {
+    background: transparent;
+  }
+  .rail-extra .related-title,
+  .rail-extra .artist-name {
+    color: var(--sa-text-primary);
+  }
+  .rail-extra .related-meta,
+  .rail-extra .artist-sub {
+    color: var(--sa-text-secondary);
+  }
+}
+
+
+
+/* 移动端播放器占位与右缘对齐修正（覆盖更早的负 margin 规则） */
+@media (max-width: 768px) {
+  .mv-container .hero-cover {
+    margin: 0;
+    border-radius: 0;
+  }
+  .hero-placeholder {
+    background: #000;
+  }
+  .hero-placeholder-play {
+    background: rgba(255, 255, 255, 0.25);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+  }
+  .dock-tabs {
+    display: none;
+  }
+}
+
+
+
+@media (max-width: 768px) {
+  .rail-extra .related-thumb {
+    background: var(--sa-subtle);
+  }
+  .rail-extra .thumb-placeholder {
+    background: var(--sa-subtle);
+    color: var(--sa-text-tertiary);
+  }
+  .rail-extra .artist-avatar {
+    border: 1px solid var(--sa-border-subtle);
+  }
+  .bili-bind-current,
+  .bili-bind-hint {
+    color: var(--sa-text-secondary);
+  }
+}
+
 </style>

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.models.artist import Artist
 from app.models.entity_field_lock import EntityFieldLock
 from app.services import fandom_service, tmdb_service
-from app.services.ai_service import translate_to_simplified
+from app.services.llm_core import translate_to_simplified
 from app.services.audiodb_service import ProviderError
 from app.services.source_sync import (
     _BAIDU_URL_RE,

@@ -21,7 +21,7 @@ from app.media.ffmpeg import FFmpegError, extract_thumbnail, probe
 from app.media.ffmpeg import ProbeError
 from app.models.music_video import MusicVideo
 from app.models.video_score import VideoScore
-from app.services.ai_service import chat_completion, parse_json
+from app.services.llm_core import chat_completion, parse_json
 from app.services.library_service import resolve_video_abs_path
 
 logger = logging.getLogger(__name__)

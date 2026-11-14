@@ -63,6 +63,18 @@ def _sidecar_identity(path: Path) -> tuple[Optional[str], Optional[str]]:
     return extract_source_identity(info)
 
 
+def _norm_path(value: str) -> str:
+    """把代理字符还原成正常 UTF-8（早期无 locale 时写库的坏路径）。
+
+    代理字符会让前端 encodeURIComponent 抛错、按路径查清单失败，
+    所以入库扫描在落库前统一规范化一次。
+    """
+    try:
+        return value.encode("utf-8", "surrogateescape").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+
+
 def _is_bilibili_multip(path: Path) -> bool:
     """识别 bili-sync 多P分集（Season 目录或 SxxExx 命名），此类暂不支持入库。"""
     s = str(path)
@@ -79,7 +91,7 @@ def _is_bilibili_multip(path: Path) -> bool:
     return False
 
 
-def sync_incoming_files(db: Session) -> dict:
+def sync_incoming_files(db: Session, force_paths: set[str] | None = None) -> dict:
     """扫描 incoming 目录并与 incoming_files 表对账，返回统计。
 
     返回字段：scanned / added / updated / removed / skipped_settling /
@@ -88,12 +100,13 @@ def sync_incoming_files(db: Session) -> dict:
     if not _scan_lock.acquire(blocking=False):
         return {"skipped_running": True}
     try:
-        return _sync_locked(db)
+        return _sync_locked(db, force_paths or set())
     finally:
         _scan_lock.release()
 
 
-def _sync_locked(db: Session) -> dict:
+def _sync_locked(db: Session, force_paths: set[str] | None = None) -> dict:
+    force_paths = force_paths or set()
     stats: dict = {
         "scanned": 0,
         "added": 0,
@@ -115,6 +128,10 @@ def _sync_locked(db: Session) -> dict:
             for path in root_dir.rglob("*"):
                 try:
                     if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
+                        continue
+                    # 隐藏目录/文件一律跳过：YouTube 下载器会在 incoming/.downloading/
+                    # 写半成品，下载完成才移入 incoming 根。这里双重保证扫描不会看到它。
+                    if any(part.startswith(".") for part in path.relative_to(root_dir).parts):
                         continue
                     st = path.stat()
                 except OSError:
@@ -145,10 +162,12 @@ def _sync_locked(db: Session) -> dict:
 
     for path, mtime, size in candidates:
         stats["scanned"] += 1
-        key = str(path)
+        key = _norm_path(str(path))
+        display_name = Path(key).name
         # 先记入 seen 再做静置跳过：文件仍在（只是写入中），旧行不能当消失删掉
         seen.add(key)
-        if now - mtime < INCOMING_SETTLE_SECONDS:
+        # 下载器刚移入的成品免静置检查（调用方明确告诉我们「已写完」）
+        if key not in force_paths and now - mtime < INCOMING_SETTLE_SECONDS:
             stats["skipped_settling"] += 1
             continue
 
@@ -209,7 +228,7 @@ def _sync_locked(db: Session) -> dict:
             db.add(
                 IncomingFile(
                     file_path=key,
-                    file_name=path.name,
+                    file_name=display_name,
                     file_size=size,
                     mtime=mtime,
                     duration=duration,

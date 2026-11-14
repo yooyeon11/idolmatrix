@@ -13,7 +13,7 @@
  * 进 feed 的一次点击即用户手势，默认有声起播；被浏览器拦截则降级静音并提示。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import Hls from 'hls.js'
 import { musicVideosApi } from '@/api/musicVideos'
 import { playbackApi } from '@/api/playback'
@@ -31,6 +31,7 @@ import {
 } from '@/components/icons'
 
 const router = useRouter()
+const route = useRoute()
 
 const BATCH_SIZE = 10
 // 距队尾不足该条数时预取下一批
@@ -66,11 +67,15 @@ const atEnd = ref(false)
 const videoEls = new Map<number, HTMLVideoElement>()
 const sessions = new Map<number, PlaybackSession>()
 const hlsInstances = new Map<number, Hls>()
-const sessionCreating = new Set<number>()
+// 同一条的会话创建必须去重成 Promise：预载中的条被划入时，激活流程要等同一个
+// 请求完成，而不是因为「正在创建」直接返回、留下一条无会话无播放的视频。
+const sessionCreating = new Map<number, Promise<PlaybackSession>>()
 const attached = new Set<number>()
 const attachedAt = new Map<number, number>()
 // 播放出错后已按 720p 转码兜底过的条：不再二次兜底
 const fallbackTried = new Set<number>()
+// 这是「本会话是否已经用过 compat.mp4」：避免 compat 自身报错后又切回同一个地址
+const compatUsed = new Set<number>()
 // 本轮已完整看过一遍的条：循环每看完一次补一条 ended 上报
 const completedSent = new Set<number>()
 // 真正出过画的条：划走时才需要补最终上报
@@ -93,7 +98,19 @@ async function initialLoad() {
   loadError.value = ''
   slideError.value = ''
   try {
+    // 从短视频页点播放进来时，先把指定那条放到队首
+    const startUid = typeof route.query.v === 'string' ? route.query.v : ''
+    let first: MusicVideo | null = null
+    if (startUid) {
+      try {
+        first = await musicVideosApi.getByUid(startUid)
+        seenIds.add(first.id)
+      } catch {
+        first = null
+      }
+    }
     const items = await fetchBatch()
+    if (first) items.unshift(first)
     queue.value = items
     exhausted.value = items.length === 0
     idx.value = 0
@@ -122,8 +139,10 @@ async function prefetchBatch() {
 }
 
 async function reshuffle() {
+  activeSeq += 1
   for (const [, s] of sessions) void playbackApi.stop(s.session_id, { force: true }).catch(() => {})
   sessions.clear()
+  sessionCreating.clear()
   for (const [, h] of hlsInstances) {
     try {
       h.destroy()
@@ -135,6 +154,7 @@ async function reshuffle() {
   attached.clear()
   attachedAt.clear()
   fallbackTried.clear()
+  compatUsed.clear()
   completedSent.clear()
   startedIds.clear()
   seenIds.clear()
@@ -167,17 +187,18 @@ function clientCaps(): Record<string, unknown> {
       return false
     }
   }
-  // MSE 口径（Direct Stream / Transcode 决策）
+  // MSE 口径（Direct Stream / Transcode 决策）。必须只认 isTypeSupported：
+  // 用 canPlayType 补 H.264 会把「伪 MSE」内核（MediaSource 在、
+  // isTypeSupported 全 false）误报成能走 HLS，服务端于是只给清单，起播必黑。
   const videoCodecs: string[] = []
-  if (mseOk('video/mp4; codecs="avc1.42E01E"') || canProbably('video/mp4; codecs="avc1.42E01E"')) videoCodecs.push('h264')
-  if (mseOk('video/mp4; codecs="av01.0.08M.08"') || mseOk('video/webm; codecs="av01.0.08M.08"')) videoCodecs.push('av1')
-  if (mseOk('video/mp4; codecs="vp09.00.51.08"') || mseOk('video/webm; codecs="vp9"')) videoCodecs.push('vp9')
+  if (mseOk('video/mp4; codecs="avc1.42E01E"')) videoCodecs.push('h264')
+  if (mseOk('video/mp4; codecs="av01.0.08M.08"')) videoCodecs.push('av1')
+  if (mseOk('video/mp4; codecs="vp09.00.51.08"')) videoCodecs.push('vp9')
   const audioCodecs: string[] = []
   if (mseOk('audio/mp4; codecs="mp4a.40.2"')) audioCodecs.push('aac')
-  if (mseOk('audio/mp4; codecs="opus"') || mseOk('audio/webm; codecs="opus"')) audioCodecs.push('opus')
-  if (mseOk('audio/mp4; codecs="mp3"') || canMaybe('audio/mpeg')) audioCodecs.push('mp3')
+  if (mseOk('audio/mp4; codecs="opus"')) audioCodecs.push('opus')
+  if (mseOk('audio/mp4; codecs="mp3"')) audioCodecs.push('mp3')
   if (mseOk('audio/mp4; codecs="flac"')) audioCodecs.push('flac')
-  if (mseOk('audio/mp4; codecs="vorbis"')) audioCodecs.push('vorbis')
   // 渐进口径（Direct Play：<video> 直连原文件）
   const progressiveVideo: string[] = []
   if (canProbably('video/mp4; codecs="avc1.42E01E"')) progressiveVideo.push('h264')
@@ -216,11 +237,27 @@ function clientCaps(): Record<string, unknown> {
     progressive_video_codecs: progressiveVideo,
     progressive_audio_codecs: progressiveAudio,
     supported_containers: containers,
-    // Apple 走 <video> 原生 HLS，其余走 hls.js，都能播服务端交付的 HLS
-    supports_hls: true,
-    supports_fmp4: true,
+    // ⚠ 必须按真实交付能力上报：没有 MediaSource 且没有原生 HLS 的内核，
+    // 报了 true 服务端就只给 HLS；attachSource 拿不到 compat 地址，必然黑屏。
+    supports_hls: Hls.isSupported() || nativeHlsSupported(),
+    // 与服务端 / 主播放页同口径：fMP4 append 的唯一真值就是 isTypeSupported。
+    supports_fmp4: mseOk('video/mp4; codecs="avc1.42E01E"'),
     user_agent: ua,
   }
+}
+
+function nativeHlsSupported(): boolean {
+  try {
+    return !!document.createElement('video').canPlayType('application/vnd.apple.mpegurl')
+  } catch {
+    return false
+  }
+}
+
+function prefersProgressive(): boolean {
+  return /VivoBrowser|OppoBrowser|HeyTapBrowser|MiuiBrowser|XiaoMi|HuaweiBrowser|HonorBrowser|UCBrowser|Quark/i.test(
+    navigator.userAgent || '',
+  )
 }
 
 function isBusyError(e: unknown): boolean {
@@ -240,6 +277,36 @@ async function createSession(v: MusicVideo, quality = 'original'): Promise<Playb
   }
 }
 
+/** 同一条视频的会话创建去重：激活与预载拿到同一个 Promise。 */
+function ensureSession(v: MusicVideo, quality = 'original'): Promise<PlaybackSession> {
+  const existing = sessions.get(v.id)
+  if (existing) return Promise.resolve(existing)
+  const pending = sessionCreating.get(v.id)
+  if (pending) return pending
+  let promise!: Promise<PlaybackSession>
+  promise = createSession(v, quality)
+    .then((s) => {
+      sessions.set(v.id, s)
+      return s
+    })
+    .finally(() => {
+      if (sessionCreating.get(v.id) === promise) sessionCreating.delete(v.id)
+    })
+  sessionCreating.set(v.id, promise)
+  return promise
+}
+
+/** 会话的 MP4 兜底地址（只对 transcode 有效，签名 query 必须原样保留）。 */
+function compatUrl(s: PlaybackSession): string {
+  if (s.play_mode !== 'transcode' || !s.manifest_url) return ''
+  const m = s.manifest_url.match(/\/sessions\/(\d+)\//)
+  if (!m) return ''
+  const q = s.manifest_url.includes('?')
+    ? s.manifest_url.slice(s.manifest_url.indexOf('?'))
+    : ''
+  return `/api/playback/sessions/${m[1]}/compat.mp4${q}`
+}
+
 function destroyHls(id: number) {
   const h = hlsInstances.get(id)
   if (h) {
@@ -257,12 +324,25 @@ function attachSource(el: HTMLVideoElement, v: MusicVideo, s: PlaybackSession) {
   attachedAt.set(v.id, Date.now())
   attached.add(v.id)
   if (s.manifest_url) {
+    const compat = compatUrl(s)
+    // 国产内核会劫持 <video>，MSE 清单在系统播放器里必失败；无 MSE 且无
+    // 原生 HLS 时 hls.js 根本挂不上。两种情况都直接走普通 MP4。
+    if (compat && (prefersProgressive() || (!Hls.isSupported() && !nativeHlsSupported()))) {
+      compatUsed.add(v.id)
+      el.src = compat
+      try {
+        el.load()
+      } catch {
+        /* 忽略 */
+      }
+      return
+    }
     if (Hls.isSupported()) {
       const hls = new Hls({ enableWorker: true })
       // 致命错误（如清单 CODECS 与 MSE 不兼容）→ 走 720p 转码兜底，与 <video> error 同路
       hls.on(Hls.Events.ERROR, (_evt, data) => {
         if (!data.fatal) return
-        if (v.id !== current.value?.id) return
+        if (v.id !== current.value?.id || hlsInstances.get(v.id) !== hls) return
         destroyHls(v.id)
         onSlideError(v)
       })
@@ -271,14 +351,25 @@ function attachSource(el: HTMLVideoElement, v: MusicVideo, s: PlaybackSession) {
       hlsInstances.set(v.id, hls)
       // ⚠ 不能在 attachMedia 之后 el.load()：load() 会重置媒体元素、拆掉 MSE 挂载，
       // hls.js 便永远等不到缓冲（实测 readyState 恒 0）。重置只属于原生 src 分支。
-    } else {
-      // 无 MSE（iOS Safari 等）：原生 HLS
+    } else if (nativeHlsSupported()) {
+      // iOS Safari 等：原生 HLS
       el.src = s.manifest_url
       try {
         el.load()
       } catch {
         /* 忽略 */
       }
+    } else if (compat) {
+      compatUsed.add(v.id)
+      el.src = compat
+      try {
+        el.load()
+      } catch {
+        /* 忽略 */
+      }
+    } else {
+      // 服务端没给可播的 MP4（例如 direct_stream）→ 走一次 720p 转码兜底
+      queueMicrotask(() => onSlideError(v))
     }
   } else if (s.stream_url) {
     el.src = s.stream_url
@@ -314,6 +405,7 @@ function stopSessionQuiet(id: number) {
 
 // active 条激活（idx 变化 / 首载 / 兜底后）：统一入口，seq 丢弃过期回调
 let activeSeq = 0
+let feedAlive = true
 
 async function activateCurrent() {
   const seq = ++activeSeq
@@ -343,23 +435,22 @@ async function activateCurrent() {
 
   void prefetchBatch()
 
-  if (!sessions.has(v.id) && !sessionCreating.has(v.id)) {
-    sessionCreating.add(v.id)
+  if (!sessions.has(v.id)) {
     activating.value = true
     try {
-      const s = await createSession(v)
-      if (seq !== activeSeq) {
-        void playbackApi.stop(s.session_id, { force: true }).catch(() => {})
-        return
-      }
-      sessions.set(v.id, s)
+      await ensureSession(v)
+      // 预载中划入：这里等的是同一个 Promise，完成后继续走下面的挂载/播放，
+      // 不会再出现「sessionCreating 中 → 跳过创建 → session 为空 → 返回」。
     } catch (e) {
       if (seq === activeSeq) slideError.value = (e as Error).message || '会话创建失败'
       return
     } finally {
-      sessionCreating.delete(v.id)
       if (seq === activeSeq) activating.value = false
     }
+  }
+  if (seq !== activeSeq) {
+    if (!feedAlive || current.value?.id !== v.id) stopSessionQuiet(v.id)
+    return
   }
   const s = sessions.get(v.id)
   const el = videoEls.get(v.id)
@@ -399,20 +490,24 @@ async function playCurrent() {
  * 即惰性启动 FFmpeg，提前挂会占并发额度，留给激活时。 */
 function preloadNext() {
   const nv = queue.value[idx.value + 1]
-  if (!nv || sessionCreating.has(nv.id)) return
+  if (!nv) return
+  const seq = activeSeq
   void (async () => {
-    sessionCreating.add(nv.id)
     try {
-      let s = sessions.get(nv.id)
-      if (!s) {
-        s = await createSession(nv)
-        const stillNext = queue.value[idx.value + 1]?.id === nv.id
-        if (!stillNext) {
-          void playbackApi.stop(s.session_id, { force: true }).catch(() => {})
-          return
-        }
-        sessions.set(nv.id, s)
+      const s = await ensureSession(nv)
+      if (seq !== activeSeq) {
+        // 若这条恰好已经成为当前条，激活流程也在 await 同一个 Promise，
+        // 不能在这里把它刚拿到的会话停掉（否则当前条永远等不到源）。
+        if (!feedAlive || current.value?.id !== nv.id) stopSessionQuiet(nv.id)
+        return
       }
+      const stillNext = queue.value[idx.value + 1]?.id === nv.id
+      const becameCurrent = current.value?.id === nv.id
+      if (!stillNext && !becameCurrent) {
+        stopSessionQuiet(nv.id)
+        return
+      }
+      if (becameCurrent) return
       if (s.stream_url && !s.manifest_url) {
         const el = videoEls.get(nv.id)
         if (el && !attached.has(nv.id)) {
@@ -422,8 +517,6 @@ function preloadNext() {
       }
     } catch {
       /* 预载失败不致命：激活时会重建 */
-    } finally {
-      sessionCreating.delete(nv.id)
     }
   })()
 }
@@ -553,6 +646,28 @@ function onSlideTime(v: MusicVideo, e: Event) {
 
 function onSlideError(v: MusicVideo) {
   if (v.id !== current.value?.id) return
+  const seq = activeSeq
+
+  // HLS 失败但同一 transcode 会话还有普通 MP4：先换 compat（零新增会话），
+  // 比直接重建 720p 更快，也避免 MSE 不兼容时再失败一次。
+  const currentSession = sessions.get(v.id)
+  const compat = currentSession ? compatUrl(currentSession) : ''
+  if (compat && !compatUsed.has(v.id)) {
+    compatUsed.add(v.id)
+    destroyHls(v.id)
+    const el = videoEls.get(v.id)
+    if (el) {
+      el.src = compat
+      try {
+        el.load()
+      } catch {
+        /* 忽略 */
+      }
+      void playCurrent()
+      return
+    }
+  }
+
   if (fallbackTried.has(v.id)) {
     slideError.value = '播放出错，可在播放页尝试其他画质'
     return
@@ -564,6 +679,10 @@ function onSlideError(v: MusicVideo) {
     activating.value = true
     try {
       const s = await createSession(v, '720p')
+      if (seq !== activeSeq || current.value?.id !== v.id) {
+        void playbackApi.stop(s.session_id, { force: true }).catch(() => {})
+        return
+      }
       sessions.set(v.id, s)
       const el = videoEls.get(v.id)
       if (el) {
@@ -571,9 +690,11 @@ function onSlideError(v: MusicVideo) {
         void playCurrent()
       }
     } catch (e) {
-      slideError.value = (e as Error).message || '播放出错'
+      if (seq === activeSeq && current.value?.id === v.id) {
+        slideError.value = (e as Error).message || '播放出错'
+      }
     } finally {
-      activating.value = false
+      if (seq === activeSeq) activating.value = false
     }
   })()
 }
@@ -673,12 +794,17 @@ function exit() {
 }
 
 function cleanup() {
+  // 先让所有在途请求过期，再清会话；否则迟到的创建响应会把刚停掉的会话
+  // 重新写回 sessions（离页泄漏），甚至重新挂载到已离开的 slide 上。
+  activeSeq += 1
+  feedAlive = false
   const v = current.value
   if (v && startedIds.has(v.id)) pingWatch(v, { playing: false })
   stopWatchLoop()
   stopHeartbeat()
   for (const [, s] of sessions) void playbackApi.stop(s.session_id, { force: true }).catch(() => {})
   sessions.clear()
+  sessionCreating.clear()
   for (const [, h] of hlsInstances) {
     try {
       h.destroy()
@@ -701,6 +827,7 @@ function onVisibility() {
 }
 
 onMounted(() => {
+  feedAlive = true
   window.addEventListener('keydown', onKey)
   document.addEventListener('visibilitychange', onVisibility)
   void initialLoad()

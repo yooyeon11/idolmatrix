@@ -5,17 +5,20 @@ import { useMessage } from 'naive-ui'
 import SaHeader from '@/components/SaHeader.vue'
 import SaPagination from '@/components/SaPagination.vue'
 import SaDensitySwitch from '@/components/SaDensitySwitch.vue'
+import SaFilterBar from '@/components/SaFilterBar.vue'
+import SaFilterSearch from '@/components/SaFilterSearch.vue'
 import SaMobileSettings from '@/components/SaMobileSettings.vue'
 import { musicVideosApi } from '@/api/musicVideos'
 import { uploadersApi, type MissingReport, type MissingVideoItem } from '@/api/uploaders'
 import { useSettingsStore } from '@/stores/settings'
 import type { MusicVideo } from '@/types/models'
 import { VIDEO_TYPE_LABEL } from '@/types/models'
-import { DownloadOutlined, LinkOutlined, MovieOutlined, RefreshOutlined, SearchOutlined } from '@/components/icons'
+import { DownloadOutlined, LinkOutlined, MovieOutlined, RefreshOutlined } from '@/components/icons'
 import { videoPath } from '@/utils/routes'
 import { formatDate, formatDuration, formatVideoSongs } from '@/utils/format'
 import { IMG_W_CARD } from '@/utils/imageSizes'
 import { useGridDensity, useGridPageSize } from '@/composables/useGridDensity'
+import { MIRROR_MODE } from '@/utils/mirror'
 
 const route = useRoute()
 const router = useRouter()
@@ -258,15 +261,9 @@ function exportMissingList() {
           <span class="head-extra">
             <SaDensitySwitch />
           </span>
-          <div class="search-box">
-            <SearchOutlined :size="15" />
-            <input
-              v-model="searchQuery"
-              class="search-input"
-              type="text"
-              placeholder="搜索该频道视频…"
-            />
-          </div>
+          <SaFilterBar>
+            <SaFilterSearch v-model="searchQuery" placeholder="搜索该频道视频…" aria-label="检索该频道视频" width="196px" />
+          </SaFilterBar>
         </div>
       </div>
 
@@ -354,7 +351,7 @@ function exportMissingList() {
               缺失视频检测：频道已配置，但未勾选「缺失检测」
             </template>
           </span>
-          <button class="missing-inline-btn" type="button" @click="gotoUploaderSettings">
+          <button v-if="!MIRROR_MODE" class="missing-inline-btn" type="button" @click="gotoUploaderSettings">
             去「资料库 · 博主管理」配置
           </button>
         </div>
@@ -388,7 +385,7 @@ function exportMissingList() {
             <!-- 相似博主匹配：博主名与规则名肉眼同名但写法不同（空格 / 全角 / 零宽字符）时
                  标注命中来源，避免用户以为配置没生效 -->
             <p v-if="missingReport!.matched_rule_name" class="missing-match-note">
-              已按相似博主「{{ missingReport!.matched_rule_name }}」的频道配置匹配（名字写法略有差异，按同一博主处理）
+              已按同一频道匹配到「{{ missingReport!.matched_rule_name }}」的配置（改名或名字写法差异按同一频道处理）
             </p>
             <div class="missing-actions">
               <button
@@ -524,35 +521,36 @@ function exportMissingList() {
 }
 
 /* ===== 视图切换（全部 / 仅库内 / 仅缺失）===== */
+/* 分段开关：逐字对齐浏览页「视频 / 文件夹」那套（3px 内衬 + 5×12 药丸 + 白底浮起） */
 .view-switch {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   margin-bottom: 20px;
-  padding: 2px;
+  padding: 3px;
   border: 1px solid var(--sa-border-subtle);
-  border-radius: 999px;
+  border-radius: 9999px;
   background: var(--sa-subtle);
 }
 .view-switch-btn {
-  height: 26px;
-  padding: 0 14px;
+  padding: 5px 12px;
   border: none;
-  border-radius: 999px;
+  border-radius: 9999px;
   background: transparent;
-  font-size: 12.5px;
+  font-size: 12px;
   font-family: inherit;
-  color: var(--sa-text-tertiary);
+  color: var(--sa-text-secondary);
   cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  transition: background-color 0.18s ease, color 0.18s ease;
 }
 .view-switch-btn:hover {
-  color: var(--sa-text-secondary);
+  color: var(--sa-text-primary);
 }
 .view-switch-btn.is-active {
   background: var(--sa-elevated);
   color: var(--sa-text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 
 /* ===== 缺失视频区块 ===== */
@@ -773,9 +771,9 @@ function exportMissingList() {
 }
 
 .mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px 64px;
+  padding: 0 var(--sa-gutter, 36px) 64px;
 }
 .detail-head {
   display: flex;
@@ -816,30 +814,6 @@ function exportMissingList() {
 /* 桌面端：head-extra 以 contents 透传给 head-tools 的 flex 布局 */
 .head-extra {
   display: contents;
-}
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 16px;
-  border-radius: 9999px;
-  border: 1px solid var(--sa-border-subtle);
-  background: var(--sa-elevated);
-  color: var(--sa-text-tertiary);
-}
-.search-box:focus-within {
-  border-color: var(--sa-accent);
-}
-.search-input {
-  border: none;
-  background: transparent;
-  color: var(--sa-text-primary);
-  font-size: 14px;
-  outline: none;
-  width: 200px;
-}
-.search-input::placeholder {
-  color: var(--sa-text-tertiary);
 }
 
 .card-grid {

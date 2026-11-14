@@ -65,11 +65,11 @@ withDefaults(
   font-size: 12.5px;
   color: var(--sa-text-tertiary);
 }
-/* 与顶栏 .sa-container 同宽（1280px），保证所有标签页左右对齐一致 */
+/* 与顶栏 .sa-container 同宽（--sa-content-max），保证所有标签页左右对齐一致 */
 .db-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px 64px;
+  padding: 0 var(--sa-gutter, 36px) 64px;
 }
 .page-head {
   display: flex;

@@ -57,6 +57,13 @@ class PlaybackSessionRead(ORMModel):
     subtitle_urls: List[Dict[str, Any]] = Field(default_factory=list)
     audio_streams: List[Dict[str, Any]] = Field(default_factory=list)
     available_qualities: List[str] = Field(default_factory=list)
+    # ===== 外部平台承载（play_mode="bilibili"）=====
+    # 非空时前端渲染 iframe 而不是 <video>；此时 stream_url / manifest_url
+    # 一律为 None（见 playback_manager.to_dict 的 bilibili 分支）。
+    embed_url: Optional[str] = None
+    watch_url: Optional[str] = None
+    embed_bvid: Optional[str] = None
+    embed_page: int = 1
 
 
 class TranscodeSessionInfo(ORMModel):

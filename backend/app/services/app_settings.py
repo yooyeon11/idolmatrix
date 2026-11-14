@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.app_setting import AppSetting
 from app.core.security import is_kept_secret
 from app.schemas.app_settings import (
+    Ai2Settings,
     ACCENTS,
     AppearanceSettings,
     AppSettingsRead,
@@ -32,6 +33,7 @@ from app.schemas.app_settings import (
 
 _SECRET_FIELDS = {
     "ingest_ai": ("api_key",),
+    "ai2": ("api_key",),
     "mtphotos": ("api_key",),
     "tmdb": ("api_key",),
     "youtube": ("api_key",),
@@ -47,6 +49,7 @@ SECTIONS = (
     "appearance",
     "hero",
     "ingest_ai",
+    "ai2",
     "mtphotos",
     "external_proxy",
     "tmdb",
@@ -67,6 +70,7 @@ def _defaults() -> dict[str, dict[str, Any]]:
         "appearance": AppearanceSettings().model_dump(),
         "hero": HeroSettings().model_dump(),
         "ingest_ai": IngestAiSettings().model_dump(),
+        "ai2": Ai2Settings().model_dump(),
         "mtphotos": MtPhotosSettings().model_dump(),
         "external_proxy": ExternalProxySettings().model_dump(),
         "tmdb": TmdbSettings().model_dump(),
@@ -135,7 +139,7 @@ def normalize_uploader_rules(raw: Any) -> list[dict[str, Any]]:
     （`MBC Kpop` / `MBCKpop`）会各自出现一行，配置若分散在两行会互相覆盖
     （后者读表时胜出，且顺序不定），因此同名规则在写入侧就合并成一条。
     """
-    from app.services.ai_service import VIDEO_TYPES
+    from app.services.llm_core import VIDEO_TYPES
 
     valid = set(VIDEO_TYPES)
     items = raw if isinstance(raw, list) else []
@@ -154,6 +158,7 @@ def normalize_uploader_rules(raw: Any) -> list[dict[str, Any]]:
                 if isinstance(t, str) and t in valid and t not in types:
                     types.append(t)
         channel = str(item.get("youtube_channel_url") or "").strip()
+        channel_id = str(item.get("youtube_channel_id") or "").strip()
         enabled = bool(item.get("missing_check_enabled"))
 
         key = uploader_key(name)
@@ -167,8 +172,10 @@ def normalize_uploader_rules(raw: Any) -> list[dict[str, Any]]:
             if channel:
                 prev["youtube_channel_url"] = channel
                 prev["missing_check_enabled"] = enabled
+            if channel_id:
+                prev["youtube_channel_id"] = channel_id
             continue
-        if not types and not channel:
+        if not types and not channel and not channel_id:
             continue
         index[key] = len(rules)
         rules.append(
@@ -176,6 +183,7 @@ def normalize_uploader_rules(raw: Any) -> list[dict[str, Any]]:
                 "name": name,
                 "video_types": types,
                 "youtube_channel_url": channel,
+                "youtube_channel_id": channel_id,
                 "missing_check_enabled": enabled,
             }
         )
@@ -280,20 +288,36 @@ def find_uploader_types(db: Session, uploader: Optional[str]) -> list[str]:
     return uploader_type_map(db).get(uploader_key(name), [])
 
 
-def find_uploader_channel(db: Session, uploader: Optional[str]) -> Optional[dict[str, Any]]:
-    """按上传人查 YouTube 缺失检测配置（频道地址 + 启用开关）。
+def find_uploader_channel(
+    db: Session, uploader: Optional[str], channel_id: Optional[str] = None
+) -> Optional[dict[str, Any]]:
+    """按上传人 / channel_id 查 YouTube 缺失检测配置（频道地址 + 启用开关）。
 
-    先按「逐字（忽略首尾空白与大小写）」精确匹配；未命中时退化为 uploader_key 宽容
-    匹配（忽略空白 / 全角 / 不可见字符差异），让库内「肉眼同名」的重复记录共用配置。
+    匹配优先级：channel_id 精确命中（改名后新旧名字都指向同一条规则）→ 逐字名字 →
+    uploader_key 宽容匹配（忽略空白 / 全角 / 不可见字符差异）。
 
     未配置频道地址返回 None；返回 dict 形如
-    {"name": 规则里的原名, "youtube_channel_url": str,
-     "missing_check_enabled": bool, "matched_by": "exact" | "loose"}。
+    {"name": 规则里的原名, "youtube_channel_url": str, "youtube_channel_id": str,
+     "missing_check_enabled": bool, "matched_by": "channel_id" | "exact" | "loose"}。
     """
+    rules = read_uploader_rules(db)
+    cid = (channel_id or "").strip()
+    if cid:
+        for rule in rules:
+            if (rule.get("youtube_channel_id") or "") != cid:
+                continue
+            if not rule.get("youtube_channel_url"):
+                continue
+            return {
+                "name": rule["name"],
+                "youtube_channel_url": rule["youtube_channel_url"],
+                "youtube_channel_id": rule.get("youtube_channel_id", ""),
+                "missing_check_enabled": bool(rule.get("missing_check_enabled")),
+                "matched_by": "channel_id",
+            }
     name = (uploader or "").strip()
     if not name:
         return None
-    rules = read_uploader_rules(db)
     strict = name.casefold()
     loose = uploader_key(name)
     for matched_by in ("exact", "loose"):
@@ -309,10 +333,33 @@ def find_uploader_channel(db: Session, uploader: Optional[str]) -> Optional[dict
             return {
                 "name": rule["name"],
                 "youtube_channel_url": rule["youtube_channel_url"],
+                "youtube_channel_id": rule.get("youtube_channel_id", ""),
                 "missing_check_enabled": bool(rule.get("missing_check_enabled")),
                 "matched_by": matched_by,
             }
     return None
+
+
+def set_uploader_channel_id(db: Session, name: Optional[str], channel_id: Optional[str]) -> bool:
+    """把解析出的 channel_id 写回同名博主规则；不触碰 missing_check_enabled。
+
+    返回是否发生变更。规则不存在时静默返回 False（由调用方决定是否先建规则）。
+    """
+    key = uploader_key(name)
+    cid = (channel_id or "").strip()
+    if not key or not cid:
+        return False
+    rules = read_uploader_rules(db)
+    changed = False
+    for rule in rules:
+        if uploader_key(rule["name"]) != key:
+            continue
+        if (rule.get("youtube_channel_id") or "") != cid:
+            rule["youtube_channel_id"] = cid
+            changed = True
+    if changed:
+        write_uploader_rules(db, rules)
+    return changed
 
 
 def write_uploader_rules(db: Session, rules: Any) -> list[dict[str, Any]]:

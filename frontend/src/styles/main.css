@@ -13,6 +13,30 @@
   font-display: swap;
   src: url('../assets/fonts/playfair-500.woff2') format('woff2');
 }
+/* Playfair Display 900：组合详情页巨型刊头（比 500 更接近首页 mockup 的 font-black 字形） */
+@font-face {
+  font-family: 'Playfair Display';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url('../assets/fonts/playfair-900.woff2') format('woff2');
+}
+
+/* Instrument Serif：组合页成员名用的高对比斜体衬线（mockup 的 font-instrument） */
+@font-face {
+  font-family: 'Instrument Serif';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/instrument-serif-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Instrument Serif';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/instrument-serif-400i.woff2') format('woff2');
+}
 
 /* ===== 全局主题令牌 =====
    浅色为默认（:root），深色通过 html[data-theme='dark'] 覆盖。
@@ -22,6 +46,11 @@
   --app-sidebar-width: 220px;
   --app-header-height: 48px;
   --sa-bottom-bar-height: 0px;
+  /* 全局顶栏高度 = 首页顶栏分隔线所在位置：
+     行顶 28 + 操作区 34 + 行内边距 14 + 边框 1 = 77px。
+     首页品牌（top 32 / 22px 衬线）、导航行、操作区与顶栏内三者逐像素同坐标，
+     路由切换时只有导航标签做 x 方向动画，品牌与整条顶栏不位移。 */
+  --sa-header-height: 77px;
 
   /* ---- 管理布局（浅色） ---- */
   --app-bg: #f5f7fa;
@@ -53,6 +82,14 @@
   --sa-series-3: #78bbff;
   --sa-series-4: #a8d5ff;
   --sa-header-bg: rgba(255, 255, 255, 0.85);
+  /* 顶栏滚动态底色：常态透明，内容滚到下方时才浮出这层薄玻璃 */
+  --sa-header-scrolled-bg: rgba(255, 255, 255, 0.72);
+  /* 内容区限宽令牌：sa 系列容器（SaHeader / container-sa / mv-container 等）统一引用。
+     大屏适配（2026-10-13）：全站由 1280 上提到 1600，后续调宽度只改这一处。 */
+  /* 页面栅格：left-gutter 固定 36px，与顶栏品牌 idolmatrix 的 i 同一竖线；
+     容器不再居中（max-width: 100%），所以在任意屏宽下内容左边缘都对齐品牌。 */
+  --sa-content-max: 100%;
+  --sa-gutter: 36px;
   --sa-img-overlay: rgba(14, 14, 18, 0.92);
   /* HeroUI v3 的 --shadow-surface 三层轻投影（与 AI / 基础设置页现有写法同配方）。
      照片墙帖子卡片 / 帖子大卡片用它替代原来的 1px 描边。 */
@@ -65,6 +102,18 @@
     0 6px 18px rgba(0, 0, 0, 0.08),
     0 2px 6px rgba(0, 0, 0, 0.06),
     0 0 1px rgba(0, 0, 0, 0.06);
+
+  /* 「苹果系物理微光层」——详情页右栏卡片专用。
+     三层复合环境微阴影：1px 贴地投影负责轮廓、8px 环境扩散负责浮起、
+     20px 大范围沉降负责与页面底色分离。相比单条 0 12px 30px rgba(0,0,0,.12)，
+     它没有生硬的黑色边缘（不会「脏」），卡片看着是轻轻浮在纸上而不是贴上去。
+     必须配 --sa-hairline（5% 发丝边框）一起用，否则纯白卡片会失去轮廓。 */
+  --sa-shadow-premium:
+    0 1px 3px rgba(0, 0, 0, 0.02),
+    0 8px 24px -4px rgba(15, 23, 42, 0.04),
+    0 20px 40px -8px rgba(15, 23, 42, 0.03);
+  /* 发丝级边框：比 --sa-border-subtle(6%) 更淡，只负责「收边」不参与分层 */
+  --sa-hairline: rgba(15, 23, 42, 0.05);
 
   /* ---- HeroUI v3 表单字段令牌（Form / TextField / Input / Button 复刻用） ----
      ⚠ HeroUI 的字段**没有描边**：--field-border-width: 0px、--field-border: transparent，
@@ -151,12 +200,18 @@ html[data-theme='dark'] {
   --sa-accent-border: rgba(4, 133, 247, 0.4);
   --sa-accent-2: #61a8fb;
   --sa-header-bg: rgba(14, 14, 18, 0.88);
+  --sa-header-scrolled-bg: rgba(14, 14, 18, 0.72);
   --sa-img-overlay: rgba(14, 14, 18, 0.92);
   /* HeroUI 在深色下把 --shadow-surface 置为 none，照做（否则深色底会出现脏投影）。
      深色下卡片靠 --sa-elevated(#15151b) 与 --sa-bg(#0e0e12) 的明度差区分，不靠描边。 */
   --sa-surface-shadow: none;
   /* 深色下没有投影可用，hover 改用 1px 描边环（无模糊，成本极低） */
   --sa-surface-shadow-hover: 0 0 0 1px rgba(255, 255, 255, 0.14);
+
+  /* 深色下投影会糊成脏块（见上一行注释），改用「顶部内高光」表达物理微光层：
+     1px 白 5% 的贴顶高光 + 8% 亮边，卡片边缘像被环境光擦过一条细线。 */
+  --sa-shadow-premium: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --sa-hairline: rgba(255, 255, 255, 0.08);
 
   /* 表单字段令牌多数自动跟随主题（见浅色块的说明），这里只补两个需要换值的：
      danger 深色口径 oklch(0.594 0.1967 24.63)；default 深色底。 */
@@ -344,49 +399,6 @@ a {
   border-radius: 24px;
 }
 
-/* ===== AI 设置页：与待整理页同口径（HeroUI field / button 规格） ===== */
-/* 用户要求「AI 设置里的组件全部采用 HeroUI 风格，与待整理页统一」。锚点 .ai-panel 只加在
-   SettingsAiPanel.vue 的根 <section> 上（该类不与其它面板共用）。前缀 .sa-section.ai-panel
-   = 特异性 0,3,0，高于 settings-shared.css 经 `<style scoped src>` 编译出的 .sa-input[data-v-x]（0,2,0）。
-   数值同待整理页：字段 12px 圆角 + `--sa-border` 描边 + --field-shadow 轻投影 + 中性聚焦（不用紫色）。 */
-.sa-section.ai-panel .sa-input {
-  background: var(--sa-elevated);
-  border-color: var(--sa-border);
-  border-radius: 12px;
-  box-shadow:
-    0 2px 4px rgba(0, 0, 0, 0.04),
-    0 1px 2px rgba(0, 0, 0, 0.06),
-    0 0 1px rgba(0, 0, 0, 0.06);
-}
-.sa-section.ai-panel .sa-input:focus {
-  border-color: color-mix(in srgb, var(--sa-text-primary) 30%, transparent);
-}
-/* 深色下 HeroUI 的 --field-shadow 为 none，照做（否则白底/深色底会出现脏投影） */
-html[data-theme='dark'] .sa-section.ai-panel .sa-input {
-  box-shadow: none;
-}
-/* 选择器同待整理页：白底 + --sa-border + 12px 圆角 + 中性聚焦 + 深色无投影，
-   统一由 db-controls.css 作用在 naive 的 `.n-base-selection` 上，这里不再重复定义。 */
-/* 按钮：圆角按 HeroUI 的 rounded-3xl(24px) */
-.sa-section.ai-panel .sa-btn {
-  border-radius: 24px;
-}
-/* 底部两个按钮统一成「白底灰字」（用户指定）——「保存设置」原本是紫底主按钮，
-   「恢复默认」原本是透明底；现在两者外观一致，主次只靠位置与图标区分。 */
-.sa-section.ai-panel .sa-btn--primary,
-.sa-section.ai-panel .sa-btn--ghost {
-  background: var(--sa-elevated);
-  border-color: var(--sa-border);
-  color: var(--sa-text-secondary);
-  font-weight: 400;
-}
-.sa-section.ai-panel .sa-btn--primary:hover,
-.sa-section.ai-panel .sa-btn--ghost:hover {
-  background: var(--sa-hover);
-  border-color: var(--sa-border);
-  color: var(--sa-text-primary);
-}
-
 /* ===== 基础设置页：与待整理页 / AI 设置页同口径（HeroUI 规格） ===== */
 /* 锚点 .base-panel 只加在 SettingsView.vue 里 `activeSection === 'base'` 的 <section> 上。
    前缀 .sa-section.base-panel = 0,3,0，高于 settings-shared.css 经 scoped 编译出的 0,2,0。
@@ -468,4 +480,11 @@ html[data-theme='dark'] .sa-section.base-panel .sa-input {
 /* 第一个大区标题紧跟在 .section-head 之后，不要再叠 28px 上边距 */
 .sa-section.base-panel .section-head + .panel-group-title {
   margin-top: 2px;
+}
+
+/* 移动端收窄栅格（与顶栏品牌 left 的移动端取值一致） */
+@media (max-width: 768px) {
+  :root {
+    --sa-gutter: 16px;
+  }
 }

@@ -19,6 +19,7 @@ import {
   StarOutlined,
   UploadOutlined,
 } from '@/components/icons'
+import { MIRROR_MODE } from '@/utils/mirror'
 
 const route = useRoute()
 
@@ -115,7 +116,7 @@ onBeforeUnmount(() => {
         </span>
         <span class="nav-tab-label">短视频</span>
       </router-link>
-      <router-link to="/settings" class="nav-tab" :class="{ 'is-active': isActive('/settings') }">
+      <router-link v-if="!MIRROR_MODE" to="/settings" class="nav-tab" :class="{ 'is-active': isActive('/settings') }">
         <span class="nav-icon">
           <NavPersonLine class="icon-line" :size="21" />
           <NavPersonFill class="icon-fill" :size="21" />

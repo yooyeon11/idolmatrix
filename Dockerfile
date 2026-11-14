@@ -5,7 +5,9 @@
 # =============================================================
 
 # ---------- Stage 1: 构建前端 ----------
-FROM node:20-alpine AS frontend-build
+# 前端产物与 CPU 架构无关，固定用构建机原生架构跑 npm：
+# 否则 ARM 机器打 amd64 镜像时，vue-tsc / vite build 会在 qemu 下慢十几倍甚至卡住。
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-build
 
 WORKDIR /build
 
@@ -125,6 +127,23 @@ WORKDIR /app
 # 先拷贝依赖清单并安装（利用 Docker 层缓存）
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+
+# yt-dlp：单独装（镜像内自带更新入口，不锁在 requirements 里）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates sqlite3 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade yt-dlp \
+    && yt-dlp --version \
+    && mkdir -p /data/tools
+
+# yt-dlp 只保留 nightly（业主 2026-10-31 口径，稳定版下线）。
+# 构建机到 GitHub release assets 的 TLS 会被打断，所以把 nightly wheel 随仓分发、离线覆盖上面装的正式版。
+# 升级：pip download --no-deps --pre --only-binary :all: -d docker/ytdlp-wheels yt-dlp
+COPY docker/ytdlp-wheels /tmp/ytdlp-wheels
+RUN pip install --no-cache-dir --no-index --find-links=/tmp/ytdlp-wheels --upgrade --pre --no-deps yt-dlp \
+    && yt-dlp --version \
+    && rm -rf /tmp/ytdlp-wheels
 
 # 拷贝后端代码与前端构建产物
 COPY backend/ /app/backend/

@@ -157,9 +157,9 @@ watch(
   min-height: 100vh;
 }
 .mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px 64px;
+  padding: 0 var(--sa-gutter, 36px) 64px;
 }
 
 .song-head {

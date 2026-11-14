@@ -231,6 +231,9 @@ class ClientCapabilities:
         if not container:
             return False
         normalized = container.lower().lstrip(".")
+        # 探测给的是 matroska，客户端上报的是 mkv：同一容器，别名对齐
+        if normalized == "matroska":
+            normalized = "mkv"
         return normalized in {c.lower() for c in self.supported_containers}
 
     # ===== 便捷属性 =====

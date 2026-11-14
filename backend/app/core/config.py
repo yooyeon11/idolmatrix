@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # 后端监听端口（固定避开 8000，避免与本机其他服务冲突）
     server_port: int = 8010
 
+    # ===== 在线版只读镜像（mirror）=====
+    # True = 云上在线版：没有任何媒体文件、不扫描、不清理缺失记录、拦截一切写请求，
+    # 播放一律走 B 站 iframe。数据来自本地导出的 SQLite 快照（见 idolmatrixweb/）。
+    # ⚠ 绝不能在本地主库上开这个开关——它会关掉媒体缺失检测与全部写接口。
+    mirror_mode: bool = False
+    # 展示用站点标识（在线版页脚/健康检查里区分环境）
+    mirror_site_name: str = ""
+
     # ===== 数据库 =====
     database_url: str = "sqlite:///./data/kpop_media.db"
 
@@ -44,6 +52,12 @@ class Settings(BaseSettings):
     storage_incoming_bili_dir: str = "./storage/incoming-bilibili"
     storage_library_dir: str = "./storage/library"
     storage_derived_dir: str = "./storage/derived"
+    # ai2 知识层运行时数据（skills 副本 / memory / reports / rules_pending）。
+    # 与代码分离：Docker 部署时单独挂 volume，代码升级不覆盖积累。
+    storage_ai_knowledge_dir: str = "./storage/ai_knowledge"
+    # idolmatrix-ingest（imflow）所在目录：入库核对任务模板的子进程调用目标。
+    # 缺省指向本机开发路径；生产部署挂载或用环境变量 IMFLOW_DIR 覆盖。
+    imflow_dir: str = r"G:\coding\idolmatrix-ingest"
 
     # ===== 图片文件夹浏览白名单根路径 =====
     # 绑定「本地文件夹」时浏览器可到达的根目录（逗号分隔多个）。
@@ -98,6 +112,32 @@ class Settings(BaseSettings):
     transcode_cleanup_interval_seconds: int = 300
     # incoming 待整理目录扫描落库的运行间隔（秒）
     incoming_scan_interval_seconds: int = 300
+
+    # ===== YouTube 下载（yt-dlp） =====
+    # yt-dlp 可执行文件路径。留空时按顺序探测：
+    #   1) <storage_data_dir>/tools/yt-dlp（**可写**，随卷持久化，支持容器内自更新）
+    #   2) 系统 PATH 里的 yt-dlp（镜像内置基线版本）
+    #   3) `python -m yt_dlp`（pip 安装的模块，兜底）
+    ytdlp_path: str = ""
+    # 自更新时把新二进制落到这个目录（必须是持久化卷，否则重建容器就丢）
+    ytdlp_install_dir: str = "/data/tools"
+    # 下载用的网络代理（NAS 在墙内时必填，形如 http://127.0.0.1:7897）；留空=直连
+    ytdlp_proxy: str = ""
+    # YouTube 需要登录态时的 cookies 文件（Netscape 格式），留空=不带
+    ytdlp_cookies_file: str = ""
+    # yt-dlp 更新通道：**只有 nightly**（业主 2026-10-31 口径，稳定版已下线）
+    # 保留该配置只为兼容旧部署的 env；服务层恒按 nightly 处理，读它也不会改变行为
+    ytdlp_channel: str = "nightly"
+    # 画质/音轨选择：业主口径 = bestvideo+bestaudio
+    ytdlp_format: str = "bestvideo+bestaudio/best"
+    # 合并容器：mkv 与现有库内文件一致（bestvideo 常为 vp9/av1，mp4 会转码浪费时间）
+    ytdlp_merge_format: str = "mkv"
+    # 同时进行的下载数（NAS 磁盘 IO 有限，默认 1）
+    download_max_concurrent: int = 1
+    # 订阅（YouTube 收藏夹/播放列表）检查间隔（秒），默认 30 分钟
+    download_subscription_interval_seconds: int = 1800
+    # 单次订阅检查最多新入队多少条，避免误订阅超大列表时灌爆队列
+    download_subscription_batch_limit: int = 20
 
     # ===== 站点获取（TheAudioDB） =====
     # 免费测试 Key 为 "2"（检索仅限测试数据，如 coldplay）；
@@ -176,6 +216,10 @@ class Settings(BaseSettings):
         return _resolve_path(self.storage_derived_dir)
 
     @property
+    def ai_knowledge_dir(self) -> Path:
+        return _resolve_path(self.storage_ai_knowledge_dir)
+
+    @property
     def transcode_dir(self) -> Path:
         return self.derived_dir / "transcode"
 
@@ -238,6 +282,7 @@ class Settings(BaseSettings):
             self.incoming_bili_dir,
             self.library_dir,
             self.derived_dir,
+            self.ai_knowledge_dir,
             self.transcode_dir,
             self.playback_transcode_dir,
             self.thumbnail_dir,

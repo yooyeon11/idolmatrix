@@ -189,6 +189,13 @@ class MusicVideo(BaseEntityMixin, Base):
     # ===== 事件 / 时间 =====
     event_name: Mapped[Optional[str]] = mapped_column(String(200))
     performance_date: Mapped[Optional[date]] = mapped_column(index=True)
+    # 机位（规范值见 app/core/vocab.py：FanCam / FaceCam / FullCam / Tower Cam /
+    # K-Choreo / OneTake / MultiCam / SkyCam / 其他）；NULL = 未标注。
+    # 画幅（横/竖）不是机位，由 width/height 派生，不入库。
+    camera_angle: Mapped[Optional[str]] = mapped_column(String(30), index=True)
+    # 场次标签「YYMMDD - 活动名」（业主 2026-10-17 口径）；不参与落位目录，
+    # 只用于展示 / 聚合 / 筛选。生成口径见 vocab.build_session_label。
+    session_label: Mapped[Optional[str]] = mapped_column(String(200), index=True)
     # 舞台类型由 AI 辅助判断后写入 event_name；is_short 手动标记，未标记时按短视频/时长自动判断
     is_short: Mapped[Optional[bool]] = mapped_column(Boolean, default=None)
     # 是否为 solo 表演（表演者为独立艺人而非组合表演），由 AI 辅助判断，供自动整理入库使用
@@ -201,6 +208,9 @@ class MusicVideo(BaseEntityMixin, Base):
     source_id: Mapped[Optional[str]] = mapped_column(String(200), index=True)
     source_url: Mapped[Optional[str]] = mapped_column(String(500))
     original_uploader: Mapped[Optional[str]] = mapped_column(String(200))
+    # YouTube 频道稳定身份（channel_id，UC…）：频道改名后仍能把新旧名字归到同一频道。
+    # 入库时从 .info.json 的 channel_id 读取；老条目由 backfill 命令从侧车补齐。
+    source_channel_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
 
     # ===== 技术字段（由 ffprobe 写入）=====
     duration: Mapped[Optional[int]] = mapped_column(Integer)  # 秒

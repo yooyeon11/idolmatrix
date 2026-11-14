@@ -90,6 +90,9 @@ TRANSCODE_STATUSES = frozenset(
 PLAY_MODE_DIRECT_PLAY = "direct_play"
 PLAY_MODE_DIRECT_STREAM = "direct_stream"
 PLAY_MODE_TRANSCODE = "transcode"
+# 外部平台承载播放：本地不读文件、不转码，前端用 iframe 指向 B 站播放器。
+# 只在「本地无片源」或 mirror 只读模式下由 API 层决定（见 api/playback.py）。
+PLAY_MODE_BILIBILI = "bilibili"
 
 # ===== 流协议 =====
 STREAM_PROTOCOL_HLS = "hls"

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { NButton, NForm, NFormItem, NInput, NModal, NSpin, useMessage } from 'naive-ui'
-import { aiApi } from '@/api/ai'
+import { NForm, NFormItem, NInput, NModal, NSpin, useMessage } from 'naive-ui'
 import { albumsApi } from '@/api/albums'
 import { artistsApi } from '@/api/artists'
 import { dashboardApi } from '@/api/dashboard'
@@ -9,11 +8,13 @@ import { groupsApi } from '@/api/groups'
 import { libraryApi } from '@/api/library'
 import { songsApi } from '@/api/songs'
 import { uploadersApi } from '@/api/uploaders'
-import { ALBUM_TYPE_OPTIONS, VIDEO_TYPE_LABEL, VIDEO_TYPE_OPTIONS } from '@/types/models'
+import { ingestApi, type IngestConfig } from '@/api/ingest'
+import { ai2Api, type Ai2Batch, type Ai2TaskRun } from '@/api/ai2'
+import Ai2SuggestDrawer from '@/components/incoming/Ai2SuggestDrawer.vue'
+import { ALBUM_TYPE_OPTIONS, CAMERA_ANGLE_OPTIONS, VIDEO_TYPE_LABEL, VIDEO_TYPE_OPTIONS } from '@/types/models'
 import type {
   AlbumBrief,
   AlbumFuzzyHit,
-  AiAnalysisSource,
   ArtistBrief,
   ArtistFuzzyHit,
   DashboardStats,
@@ -22,7 +23,6 @@ import type {
   IncomingInfo,
   ScannedFileItem,
   Song,
-  SongBrief,
   SongFuzzyHit,
 } from '@/types/models'
 import { formatDuration, formatFileSize, formatResolution, detectPlatform } from '@/utils/format'
@@ -35,19 +35,14 @@ import type { TrackRow } from '@/components/VideoTrackList.vue'
 import {
   InboxOutlined,
   RefreshOutlined,
-  RobotOutlined,
   FolderOutlined,
   ArrowLeftOutlined,
-  SearchOutlined,
-  LoadingOutlined,
   InfoOutlined,
   CloseOutlined,
   WarningAmberOutlined,
   DeleteOutlined,
 } from '@/components/icons'
-import { loadAi, outboundAiCreds, readIngestAiConfig } from '@/views/settings/aiLocal'
 
-const emit = defineEmits<{ gotoAi: [] }>()
 const message = useMessage()
 
 // ===== 待整理板块 =====
@@ -288,21 +283,33 @@ const uploaderRuleLabels = computed(() =>
 
 // ===== 待整理详情（主从视图） =====
 const activeItem = ref<ScannedFileItem | null>(null)
+const ingestCfg = ref<IngestConfig | null>(null)
+
+async function rebuildIncomingIndex() {
+  try {
+    const r = await libraryApi.scanReset()
+    await libraryApi.scanSync()
+    await loadIncoming()
+    await loadStats()
+    message.success(`索引已重建（清理 ${r.cleared_files} 条旧记录 / ${r.cleared_manifests} 份旧清单）`)
+  } catch (e) {
+    message.error((e as Error).message)
+  }
+}
+
+async function loadIngestCfg() {
+  try {
+    ingestCfg.value = await ingestApi.config()
+  } catch {
+    /* 设置读不到不阻塞页面 */
+  }
+}
 const detailInfo = ref<IncomingInfo | null>(null)
 
 const infoLoading = ref(false)
 const coverFailed = ref(false)
 // 本地同名封面（/library/local-cover）加载失败后回退远程缩略图的标志
 const localCoverFailed = ref(false)
-const aiLoading = ref(false)
-const albumAiLoading = ref(false)
-const albumAiOpen = ref(false)
-const albumAiNames = ref<string[]>([])
-const albumAiInfo = ref<{ song?: string; performer?: string }>({})
-// 多首歌曲时 AI 逐曲识别的专辑结果（单曲时为空，用 albumAiNames 展示）
-const albumAiMulti = ref<{ song: string; albums: string[] }[]>([])
-// AI 返回的来源清单（供展示核对）
-const albumAiSources = ref<AiAnalysisSource[]>([])
 const ingesting = ref(false)
 const libraryDirs = ref<string[]>([])
 const destPreview = ref<{ relative: string; absolute: string; notice?: string | null }>({ relative: '', absolute: '', notice: null })
@@ -311,8 +318,6 @@ const destDirOpen = ref(false)
 const destRelTouched = ref(false)
 // 用户手动编辑过标题（name）后停止自动重建；AI 回填 / 强制重建按钮可重新生成
 const titleTouched = ref(false)
-const aiFilling = ref(false)
-
 interface DetailForm {
   video_types: string[]
   original_title: string
@@ -320,6 +325,10 @@ interface DetailForm {
   chinese_name: string
   event_name: string
   performance_date: string
+  // 机位（规范值见后端 app/core/vocab.py）；null = 未标注
+  camera_angle: string | null
+  // 场次「YYMMDD - 活动名」；留空 = 入库时按 表演日期 + 活动名/频道名 自动生成
+  session_label: string
   published_date: string
   source_platform: string
   source_url: string
@@ -346,6 +355,8 @@ const detailForm = reactive<DetailForm>({
   chinese_name: '',
   event_name: '',
   performance_date: '',
+  camera_angle: null,
+  session_label: '',
   published_date: '',
   source_platform: '',
   source_url: '',
@@ -361,6 +372,20 @@ const detailForm = reactive<DetailForm>({
 })
 
 const libraryRoot = ref('')
+
+/**
+ * 场次自动生成预览（与后端 `vocab.build_session_label` 同口径）：
+ * 日期取表演日期、缺失回退上传日期；活动名取「舞台 / 活动」，缺失回退频道名。
+ * 留空提交时由后端按同一口径落库，这里只做「让你看见会写成什么」。
+ */
+const autoSessionLabel = computed(() => {
+  const raw = (detailForm.performance_date || detailForm.published_date || '').trim()
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return ''
+  const name = (detailForm.event_name || '').trim() || (detailForm.original_uploader || '').trim()
+  if (!name) return ''
+  return `${m[1].slice(2)}${m[2]}${m[3]} - ${name}`
+})
 
 const destAbsDisplay = computed(() => {
   const rel = detailForm.destination_rel.trim().replace(/\\/g, '/')
@@ -395,9 +420,6 @@ function onDetailCoverError() {
 
 async function openDetail(item: ScannedFileItem) {
   activeItem.value = item
-  // 换文件即清掉上一个文件的 AI 加载态（其结果由 aiIngest 的 item 守卫丢弃）
-  aiLoading.value = false
-  aiFilling.value = false
   Object.assign(detailForm, {
     video_types: ['Other'],
     original_title: '',
@@ -405,6 +427,8 @@ async function openDetail(item: ScannedFileItem) {
     chinese_name: '',
     event_name: '',
     performance_date: '',
+    camera_angle: null,
+    session_label: '',
     published_date: '',
     source_platform: '',
     source_url: '',
@@ -485,7 +509,6 @@ async function applyLocalMatchHints(item: ScannedFileItem) {
       if (hints.notices.length) message.info(hints.notices.join('；'))
       return
     }
-    aiFilling.value = true // 抑制填充过程中的路径/标题联动抖动
     try {
       for (const a of hints.artists) {
         if (!detailForm.artist_ids.includes(a.id)) detailForm.artist_ids.push(a.id)
@@ -525,9 +548,8 @@ async function applyLocalMatchHints(item: ScannedFileItem) {
         }))
       }
     } finally {
-      aiFilling.value = false
+      /* 本地匹配填充结束 */
     }
-    // 填充完成后手动刷新一次（watch 被 aiFilling 抑制了）
     if (!destRelTouched.value) await refreshDestPreview()
     if (!titleTouched.value) void refreshTitle()
     const medium = hints.tracks.filter((t) => t.confidence === 'medium')
@@ -646,7 +668,6 @@ const draftGroupNames = ref<string[]>([])
 watch(
   () => [detailForm.name, detailForm.video_types, detailForm.is_solo, detailForm.performance_date, detailForm.tracks, detailForm.artist_ids, detailForm.group_ids, draftArtistNames, draftGroupNames],
   () => {
-    if (aiFilling.value) return
     if (activeItem.value && !destRelTouched.value) {
       void refreshDestPreview()
     }
@@ -658,7 +679,6 @@ watch(
 watch(
   () => [detailForm.performance_date, detailForm.published_date, detailForm.tracks, detailForm.artist_ids, detailForm.group_ids, detailForm.video_types, detailForm.event_name],
   () => {
-    if (aiFilling.value) return
     if (activeItem.value && !titleTouched.value) {
       void refreshTitle()
     }
@@ -669,9 +689,117 @@ watch(
 function closeDetail() {
   activeItem.value = null
   detailInfo.value = null
-  // 离开详情即清掉 AI 加载态：残留的 AI 请求由 aiIngest 内的 item 守卫丢弃
-  aiLoading.value = false
-  aiFilling.value = false
+}
+
+// ===== 视图标签（文件 / 批次 / 报告）=====
+const incomingTab = ref<'files' | 'batches' | 'reports'>('files')
+const batches = ref<Ai2Batch[]>([])
+const batchLoading = ref(false)
+const auditBatchName = ref<string | null>(null)
+const auditResult = ref<Ai2TaskRun | null>(null)
+const reports = ref<{ file: string; size: number }[]>([])
+const reportPreview = ref<{ file: string; html: string } | null>(null)
+const reportLoading = ref(false)
+
+async function switchIncomingTab(tab: 'files' | 'batches' | 'reports') {
+  incomingTab.value = tab
+  if (tab === 'files' && !incomingList.value.length) void loadIncoming()
+  if (tab === 'batches') {
+    batchLoading.value = true
+    try {
+      batches.value = await ai2Api.imflowBatches()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      batchLoading.value = false
+    }
+  }
+  if (tab === 'reports') {
+    try {
+      reports.value = await ai2Api.reports(50)
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+}
+
+async function runBatchAudit(b: Ai2Batch) {
+  auditBatchName.value = b.batch
+  auditResult.value = null
+  try {
+    auditResult.value = await ai2Api.runTask('ingest_audit', { batch: b.batch })
+    const st = auditResult.value.status
+    if (st === 'done') message.success(`核对完成（偏离 ${auditResult.value.result?.findings_total ?? 0} 项），报告已落盘`)
+    else if (st === 'skipped') message.warning(auditResult.value.error || '任务跳过')
+    else message.error(auditResult.value.error || '核对失败')
+    batches.value = await ai2Api.imflowBatches()
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    auditBatchName.value = null
+  }
+}
+
+async function openReport(file: string) {
+  reportLoading.value = true
+  try {
+    reportPreview.value = await ai2Api.report(file)
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    reportLoading.value = false
+  }
+}
+
+// ===== 单文件 ai2 建议（抽屉逐字段采纳，不写库）=====
+const aiSuggLoading = ref(false)
+const suggestOpen = ref(false)
+const suggestRunId = ref<string | null>(null)
+
+async function suggestWithAi2() {
+  if (!activeItem.value) return
+  aiSuggLoading.value = true
+  try {
+    const info = {
+      file_name: activeItem.value.file_name,
+      ...(detailInfo.value || {}),
+      current: { ...detailForm },
+    }
+    const run = await ai2Api.startTask('ingest_suggest', { info })
+    suggestRunId.value = run.id
+    suggestOpen.value = true
+  } catch (e) {
+    message.error((e as Error).message)
+  } finally {
+    aiSuggLoading.value = false
+  }
+}
+
+function applyAi2Suggestion(patch: Record<string, unknown>) {
+  const applied: string[] = []
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'video_types' && Array.isArray(value)) {
+      detailForm.video_types = value.filter((v): v is string => typeof v === 'string')
+      applied.push('视频类型')
+      continue
+    }
+    if (key === 'is_solo' && typeof value === 'boolean') {
+      detailForm.is_solo = value
+      applied.push('Solo')
+      continue
+    }
+    if (key === 'camera_angle' && typeof value === 'string') {
+      detailForm.camera_angle = value
+      applied.push('机位')
+      continue
+    }
+    if (typeof value === 'string' && key in detailForm) {
+      ;(detailForm as unknown as Record<string, unknown>)[key] = value
+      applied.push(key)
+    }
+  }
+  if (applied.includes('name') && !titleTouched.value) titleTouched.value = true
+  message.success(applied.length ? `已采纳 ${applied.length} 个字段，请核对后入库` : '没有采纳任何字段')
 }
 
 // ===== 删除待整理文件（详情页头部入口，确认弹窗 HeroUI 风格）=====
@@ -697,9 +825,6 @@ async function doDeleteScanned() {
 }
 
 // ===== 关联搜索（歌曲 / 专辑 / 艺术家 / 组合） =====
-function songLabel(s: SongBrief): string {
-  return s.chinese_name ? `${s.name} / ${s.chinese_name}` : s.name
-}
 
 function albumLabel(a: AlbumBrief): string {
   return a.chinese_name ? `${a.name} / ${a.chinese_name}` : a.name
@@ -1176,35 +1301,6 @@ function closeSongFuzzy(v: SongFuzzyHit | 'create' | 'skip') {
   r?.(v)
 }
 
-async function askSongFuzzy(name: string): Promise<SongFuzzyHit | 'create' | 'skip'> {
-  songFuzzyLoading.value = true
-  let candidates: SongFuzzyHit[] = []
-  try {
-    candidates = await songsApi.fuzzy(name)
-  } catch {
-    return 'create'
-  } finally {
-    songFuzzyLoading.value = false
-  }
-  const exact = candidates.find((c) => (c.score || 0) >= 0.999)
-  if (exact) return exact
-  // 高置信且无歧义（第二名明显更低）→ 自动关联，不打断用户
-  const [top, second] = candidates
-  if (
-    top &&
-    (top.score || 0) >= 0.9 &&
-    (!second || (second.score || 0) < 0.9)
-  ) {
-    return top
-  }
-  if (!candidates.length) return 'create'
-  return new Promise((resolve) => {
-    songFuzzyTitle.value = name
-    songFuzzyCandidates.value = candidates
-    songFuzzyResolve.value = resolve
-    songFuzzyOpen.value = true
-  })
-}
 
 const groupFuzzyOpen = ref(false)
 const groupFuzzyTitle = ref('')
@@ -1421,11 +1517,6 @@ watch(
   { immediate: true },
 )
 
-interface AiRelBrief {
-  id: number
-  name: string
-}
-
 // ===== AI 建议「待新建」草稿 =====
 // AI 分析只填草稿，点「入库」时才真正创建，避免错误数据直接进库
 // （声明需在上方 watch 之前，watch 注册时即会读取这些 ref）
@@ -1443,484 +1534,6 @@ interface DraftTrackRow extends TrackRow {
  * 都不是 / 无候选 → 返回 'draft'（挂为「待新建」草稿，入库时才创建）。
  * 不再在 AI 阶段直接创建任何实体。
  */
-async function linkOrCreateAiRel<T extends AiRelBrief>(
-  name: string,
-  search: (q: string) => Promise<T[]>,
-  labelOf: (item: T) => string,
-  ids: number[],
-  presets: SaOption[],
-  fuzzy?: (name: string) => Promise<T | 'create' | 'skip'>,
-  allowedIds?: Set<number> | null,
-): Promise<'linked' | 'draft' | 'skipped' | 'error'> {
-  const n = name.trim()
-  if (!n) return 'error'
-  const lower = n.toLowerCase()
-  let item: T | undefined
-  try {
-    const list = await search(n)
-    item = list.find((it) => {
-      if ((it.name || '').toLowerCase() === lower) return true
-      const extra = it as {
-        chinese_name?: string | null
-        stage_name?: string | null
-        english_name?: string | null
-        korean_name?: string | null
-      }
-      return [extra.chinese_name, extra.stage_name, extra.english_name, extra.korean_name].some(
-        (v) => v && v.toLowerCase() === lower,
-      )
-    })
-  } catch {
-    item = undefined
-  }
-  const linkTo = (hit: T, tag: string) => {
-    if (!ids.includes(hit.id)) ids.push(hit.id)
-    if (!presets.some((o) => o.value === hit.id)) {
-      presets.push({ label: labelOf(hit), value: hit.id, tag })
-    }
-  }
-  try {
-    if (item && allowedIds && !allowedIds.has(item.id)) return 'skipped'
-    if (!item) {
-      if (fuzzy) {
-        const chosen = await fuzzy(n)
-        if (chosen === 'skip') return 'skipped'
-        if (chosen === 'create') return 'draft'
-        if (allowedIds && !allowedIds.has(chosen.id)) return 'skipped'
-        linkTo(chosen, 'AI 建议')
-        return 'linked'
-      }
-      return 'draft'
-    }
-    linkTo(item, 'AI 建议')
-    return 'linked'
-  } catch {
-    return 'error'
-  }
-}
-
-async function applyAiRelationSuggestions(
-  artists?: string[] | null,
-  groups?: string[] | null,
-) {
-  const drafted: string[] = []
-  const failed: string[] = []
-  const skipped: string[] = []
-  const run = async <T extends AiRelBrief>(
-    names: string[] | null | undefined,
-    search: (q: string) => Promise<T[]>,
-    labelOf: (item: T) => string,
-    ids: number[],
-    presets: SaOption[],
-    fuzzy: (name: string) => Promise<T | 'create' | 'skip'>,
-    draftTarget: 'artist' | 'group',
-    allowedIds?: Set<number> | null,
-  ) => {
-    if (!Array.isArray(names)) return
-    for (const nm of names) {
-      const r = await linkOrCreateAiRel<T>(
-        nm,
-        search,
-        labelOf,
-        ids,
-        presets,
-        fuzzy,
-        allowedIds,
-      )
-      const name = nm.trim()
-      if (r === 'draft') {
-        const list = draftTarget === 'artist' ? draftArtistNames : draftGroupNames
-        if (name && !list.value.includes(name)) list.value.push(name)
-        drafted.push(name)
-      } else if (r === 'error') failed.push(name)
-      else if (r === 'skipped') skipped.push(name)
-    }
-  }
-  // 先挂组合，严格档才能用成员关系闸过滤艺人
-  await run(
-    groups,
-    (q) => groupsApi.brief(q),
-    (g) => groupLabel(g),
-    detailForm.group_ids,
-    groupPresets.value,
-    (n) => askGroupFuzzy(n),
-    'group',
-  )
-  // 自动关联策略固定为严格 → 组合相关艺人过滤恒定生效（原来这里还判断 match_mode）
-  let allowedArtists: Set<number> | null = null
-  if (detailForm.group_ids.length) {
-    try {
-      const rel = await groupsApi.relatedArtists(detailForm.group_ids)
-      allowedArtists = new Set(rel.artist_ids || [])
-    } catch {
-      allowedArtists = new Set()
-    }
-  }
-  await run(
-    artists,
-    (q) => artistsApi.brief(q),
-    (a) => artistLabel(a),
-    detailForm.artist_ids,
-    artistPresets.value,
-    (n) => askArtistFuzzy(n, allowedArtists),
-    'artist',
-    allowedArtists,
-  )
-  if (drafted.length) {
-    const shown = drafted.slice(0, 5).join('、')
-    message.info(
-      `以下内容标注为「待新建」，入库时才会创建：${shown}${drafted.length > 5 ? ' 等' : ''}`,
-    )
-  }
-  if (failed.length) {
-    const shown = failed.slice(0, 5).join('、')
-    message.warning(`以下关联处理失败：${shown}${failed.length > 5 ? ' 等' : ''}`)
-  }
-  if (skipped.length) {
-    const shown = skipped.slice(0, 5).join('、')
-    message.info(`未关联：${shown}${skipped.length > 5 ? ' 等' : ''}（已跳过，可稍后手动处理）`)
-  }
-}
-
-function applyFilledText(key: 'name' | 'chinese_name' | 'event_name' | 'performance_date' | 'chinese_description', value: unknown) {
-  if (typeof value === 'string' && value.trim()) {
-    detailForm[key] = value.trim()
-  }
-}
-
-async function aiIngest() {
-  const cfg = readIngestAiConfig()
-  if (!cfg) {
-    const loaded = loadAi()
-    if (loaded.base_url && loaded.model && !loaded.enabled) {
-      message.warning('入库 AI 未启用，请到设置里打开「启用入库 AI」')
-    } else {
-      message.warning('请先在「入库 AI 设置」中填写 API Base URL 与模型')
-    }
-    emit('gotoAi')
-    return
-  }
-  aiLoading.value = true
-  aiFilling.value = true
-  // 守卫：AI 请求耗时较长，期间用户可能退回列表或打开另一个视频。
-  // 表单是共享的，返回结果必须校验还是同一个文件，否则会填进新视频的表单。
-  const item = activeItem.value
-  const stillSameItem = () => item != null && activeItem.value?.path === item.path
-  try {
-    const info = { ...(detailInfo.value || {}) } as Record<string, unknown>
-    const desc = info.description
-    if (typeof desc === 'string' && desc.length > 2000) {
-      info.description = `${desc.slice(0, 2000)}…`
-    }
-    const aiContext = {
-      ...info,
-      file_name: activeItem.value?.file_name || '',
-      duration: detailForm.duration ?? activeItem.value?.duration ?? null,
-      width: detailForm.width ?? activeItem.value?.width ?? null,
-      height: detailForm.height ?? activeItem.value?.height ?? null,
-      fps: detailInfo.value?.fps ?? null,
-      video_codec: detailForm.video_codec ?? activeItem.value?.video_codec ?? null,
-      audio_codec: detailForm.audio_codec ?? activeItem.value?.audio_codec ?? null,
-    }
-    const suggestion = await aiApi.suggest({
-      ...outboundAiCreds(cfg),
-      context: aiContext,
-      current: { ...detailForm },
-    })
-    if (!stillSameItem()) {
-      // 用户已退回列表 / 切换到其他视频：丢弃本次 AI 结果，避免串填
-      message.info('已离开当前视频，本次 AI 建议已丢弃')
-      return
-    }
-    applyFilledText('name', suggestion.name)
-    applyFilledText('chinese_name', suggestion.chinese_name)
-    applyFilledText('event_name', suggestion.event_name)
-    applyFilledText('performance_date', suggestion.performance_date)
-    applyFilledText('chinese_description', suggestion.chinese_description)
-    if (typeof suggestion.name === 'string' && suggestion.name.trim()) {
-      titleTouched.value = true
-    }
-    if (typeof suggestion.is_solo === 'boolean') {
-      detailForm.is_solo = suggestion.is_solo
-    }
-    if (Array.isArray(suggestion.video_types) && suggestion.video_types.length) {
-      detailForm.video_types = suggestion.video_types.filter((v): v is string => Boolean(v))
-    } else if (typeof suggestion.video_type === 'string' && suggestion.video_type) {
-      detailForm.video_types = [suggestion.video_type]
-    } else if (!detailForm.video_types || detailForm.video_types.length === 0) {
-      detailForm.video_types = ['Other']
-    }
-    // 博主规则优先：命中「博主管理」里固定类型的博主时，类型以规则为准（后端同样会覆盖）
-    if (uploaderRuleTypes.value.length) {
-      detailForm.video_types = [...uploaderRuleTypes.value]
-    }
-    await applyAiRelationSuggestions(suggestion.suggested_artists, suggestion.suggested_groups)
-    await applySuggestedTracks(
-      suggestion.suggested_tracks,
-      suggestion.suggested_songs,
-      suggestion.suggested_albums,
-    )
-    if (suggestion.notice) {
-      message.warning(suggestion.notice)
-    }
-    message.success(
-      uploaderRuleTypes.value.length
-        ? `AI 建议已填充（视频类型按博主规则固定为「${uploaderRuleLabels.value}」），请核对后入库`
-        : 'AI 建议已填充，请核对后入库',
-    )
-  } catch (e) {
-    message.error((e as Error).message)
-  } finally {
-    // 只有还停留在同一个文件时才动全局加载标志，避免残留请求干扰新打开的文件
-    if (stillSameItem()) {
-      aiFilling.value = false
-      aiLoading.value = false
-      if (activeItem.value && !destRelTouched.value) {
-        void refreshDestPreview()
-      }
-    }
-  }
-}
-
-async function aiSearchAlbum() {
-  const cfg = readIngestAiConfig()
-  if (!cfg) {
-    message.warning('请先在「入库 AI 设置」中填写 API Base URL 与模型')
-    emit('gotoAi')
-    return
-  }
-  // 以当前表单为准，而非 AI 入库时的名称快照：
-  // 歌曲来自曲目栏（song_id → 名称），艺人/组合来自已选下拉项
-  const songIds = detailForm.tracks
-    .map((t) => t.song_id)
-    .filter((id): id is number => id != null)
-  await fetchSongLabels(songIds)
-  const song_names = songIds
-    .map((id) => songNameMap.value.get(id))
-    .filter((n): n is string => {
-      if (!n) return false
-      return !n.startsWith('#')
-    })
-  const artist_names: string[] = []
-  for (const id of detailForm.artist_ids) {
-    try {
-      artist_names.push(artistLabel(await artistsApi.get(id)))
-    } catch {
-      // 单个反查失败不影响其他项
-    }
-  }
-  const group_names: string[] = []
-  for (const id of detailForm.group_ids) {
-    try {
-      group_names.push(groupLabel(await groupsApi.get(id)))
-    } catch {
-      // 单个反查失败不影响其他项
-    }
-  }
-  albumAiLoading.value = true
-  try {
-    const result = await aiApi.searchAlbums({
-      ...outboundAiCreds(cfg),
-      context: { ...(detailInfo.value || {}) },
-      current: { ...detailForm },
-      song_names,
-      artist_names,
-      group_names,
-    })
-    const songName = (result.song_name || '').trim()
-    const performer = (result.performer || '').trim()
-    const names = (result.suggested_albums || []).map((n) => n.trim()).filter(Boolean)
-    const multi = (result.multi_songs || []).filter(
-      (m) => m && m.song && Array.isArray(m.albums) && m.albums.length > 0,
-    )
-    albumAiInfo.value = { song: songName, performer }
-    albumAiMulti.value = multi
-    albumAiSources.value = result.sources || []
-    if (multi.length) {
-      albumAiOpen.value = true
-      return
-    }
-    if (!names.length) {
-      if (!songName && !performer) {
-        message.info('AI 未能识别出歌曲与所属专辑，建议先运行「AI 入库」获取歌曲/组合名后再搜索')
-      } else {
-        albumAiOpen.value = true
-        albumAiNames.value = []
-      }
-      return
-    }
-    albumAiNames.value = names
-    albumAiOpen.value = true
-  } catch (e) {
-    message.error((e as Error).message)
-  } finally {
-    albumAiLoading.value = false
-  }
-}
-
-async function applySuggestedTracks(
-  items?: { song: string; albums?: string[] }[] | null,
-  fallbackSongs?: string[] | null,
-  fallbackAlbums?: string[] | null,
-) {
-  const failed: string[] = []
-  const drafted: string[] = []
-
-  // 关联已有歌曲；库里没有则返回 null（歌曲名挂为待新建草稿）
-  const resolveSong = async (name: string): Promise<number | null> => {
-    const ids: number[] = []
-    const r = await linkOrCreateAiRel(
-      name,
-      (q) => songsApi.brief(q),
-      songLabel,
-      ids,
-      songPresets.value,
-      (n) => askSongFuzzy(n),
-    )
-    if (r === 'draft') drafted.push(name.trim())
-    else if (r === 'error') failed.push(name.trim())
-    const sid = ids[0] ?? null
-    if (sid) {
-      const label = songPresets.value.find((o) => o.value === sid)?.label || name
-      songNameMap.value.set(sid, label)
-    }
-    return sid
-  }
-
-  // 专辑：关联已有的；没有的挂为待新建草稿
-  const resolveAlbums = async (
-    names: string[],
-  ): Promise<{ albumIds: number[]; draftAlbums: string[] }> => {
-    const ids: number[] = []
-    const drafts: string[] = []
-    for (const n of names) {
-      const r = await linkOrCreateAiRel(
-        n,
-        (q) =>
-          albumsApi.brief(q).then((l) => {
-            rememberAlbumOwners(l)
-            return l
-          }),
-        albumLabel,
-        ids,
-        manualAlbumPresets.value,
-        (nm) => askAlbumFuzzy(nm),
-      )
-      if (r === 'draft') {
-        if (!drafts.includes(n.trim())) drafts.push(n.trim())
-      } else if (r === 'error') failed.push(n.trim())
-    }
-    return { albumIds: ids, draftAlbums: drafts }
-  }
-
-  const rows: DraftTrackRow[] = []
-  const sourceItems =
-    items && items.length
-      ? items
-      : (fallbackSongs || []).map((song) => ({
-          song,
-          albums:
-            (fallbackAlbums || []).length === 1 || (fallbackSongs || []).length === 1
-              ? fallbackAlbums || []
-              : [],
-        }))
-  // 已有曲目行（本地匹配 / 用户手动选的）保留，AI 只补空白不覆盖
-  const keepRows = detailForm.tracks.filter(
-    (t) =>
-      t.local_matched ||
-      t.song_id != null ||
-      !!t.draft_song ||
-      (t.draft_albums && t.draft_albums.length > 0),
-  )
-  const existingSongIds = new Set(
-    keepRows.map((t) => t.song_id).filter((id): id is number => id != null),
-  )
-  for (const it of sourceItems) {
-    const songId = await resolveSong(it.song)
-    // 该歌曲已有行（本地匹配或用户已选）：只在行内没有专辑时补 AI 建议的专辑
-    if (songId != null && existingSongIds.has(songId)) {
-      const row = keepRows.find((t) => t.song_id === songId)
-      if (row && row.album_ids.length === 0) {
-        const { albumIds, draftAlbums } = await resolveAlbums(it.albums || [])
-        row.album_ids = albumIds
-        row.draft_albums = draftAlbums
-      }
-      continue
-    }
-    // 歌曲未关联上也保留行：挂为待新建草稿，入库时创建
-    const { albumIds, draftAlbums } = await resolveAlbums(it.albums || [])
-    rows.push({
-      key: `t-${Date.now()}-${rows.length}`,
-      song_id: songId,
-      album_ids: albumIds,
-      draft_song: songId == null ? it.song.trim() : null,
-      draft_albums: draftAlbums,
-    })
-  }
-  const merged = [...keepRows, ...rows]
-  if (merged.length) detailForm.tracks = merged
-  if (drafted.length) {
-    const shown = drafted.slice(0, 5).join('、')
-    message.info(
-      `以下标注为「待新建」，入库时才会创建：${shown}${drafted.length > 5 ? ' 等' : ''}`,
-    )
-  }
-  if (failed.length) {
-    message.warning(`以下关联处理失败：${failed.slice(0, 5).join('、')}`)
-  }
-}
-
-async function albumAiLink(name: string, song?: string) {
-  const ids: number[] = []
-  const r = await linkOrCreateAiRel<AlbumBrief>(
-    name,
-    (q) =>
-      albumsApi.brief(q).then((l) => {
-        rememberAlbumOwners(l)
-        return l
-      }),
-    albumLabel,
-    ids,
-    manualAlbumPresets.value,
-    (n) => askAlbumFuzzy(n),
-  )
-  // 定位目标曲目行（按歌曲名匹配，或首个空行）
-  let candidates = detailForm.tracks
-  if (song) {
-    const matched = detailForm.tracks.filter(
-      (t) => t.song_id != null && songNameMap.value.get(t.song_id) === song,
-    )
-    if (matched.length) candidates = matched
-    else {
-      message.warning(`未找到「${song}」对应的曲目行，未关联专辑`)
-      return
-    }
-  }
-  const row =
-    candidates.find((t) => t.song_id != null && t.album_ids.length === 0) ||
-    candidates.find((t) => t.song_id != null) ||
-    candidates[0]
-  if (r === 'draft') {
-    // 库内没有该专辑：挂为待新建草稿，入库时创建
-    if (row) {
-      const drafts = row.draft_albums || []
-      const trimmed = name.trim()
-      if (trimmed && !drafts.includes(trimmed)) {
-        row.draft_albums = [...drafts, trimmed]
-      }
-    }
-    message.info(`专辑「${name}」标注为待新建，入库时才会创建`)
-    return
-  }
-  if (ids[0] && row && !row.album_ids.includes(ids[0])) row.album_ids.push(ids[0])
-  if (r === 'linked') message.success(`已关联专辑：${name}`)
-  else if (r === 'skipped') message.info(`已跳过：${name}`)
-  else if (r === 'error') message.error(`关联失败：${name}`)
-}
-
-// ===== 草稿落库（入库前调用） =====
-// 创建失败时尝试模糊匹配已有记录（可能被其他人/其他入库并发建了同名实体）；
-// 返回 null 表示彻底失败，调用方中止入库
 async function createOrFuzzyLink(
   create: () => Promise<{ id: number }>,
   fuzzy: () => Promise<{ id: number; score?: number }[]>,
@@ -2118,6 +1731,7 @@ async function confirmIngest() {
 
 onMounted(() => {
   void loadStats()
+  void loadIngestCfg()
   void loadUploaderRules()
   libraryApi.paths().then((p) => {
     libraryRoot.value = p.library || ''
@@ -2290,6 +1904,196 @@ onMounted(() => {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* ===== 入库清单自动化（M2）===== */
+.ingest-cfg {
+  border: 1px solid var(--sa-border);
+  border-radius: 14px;
+  background: var(--sa-elevated);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.ingest-cfg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ingest-cfg-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sa-text-primary);
+}
+.ingest-cfg-sub {
+  font-size: 11.5px;
+  color: var(--sa-text-tertiary);
+}
+.ingest-cfg-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.ingest-cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ingest-cfg-label {
+  width: 88px;
+  flex: none;
+  font-size: 12.5px;
+  color: var(--sa-text-primary);
+}
+.ingest-cfg-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--sa-text-tertiary);
+}
+.ingest-cfg-input {
+  width: 150px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--sa-border);
+  background: var(--sa-bg);
+  color: var(--sa-text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.ingest-cfg-input:focus {
+  border-color: var(--sa-text-tertiary);
+}
+.ingest-switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: none;
+  padding: 0;
+  border-radius: 9999px;
+  border: 1px solid var(--sa-border);
+  background: var(--sa-subtle);
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
+}
+.ingest-switch i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--sa-text-tertiary);
+  transition: left 0.18s ease, background-color 0.18s ease;
+}
+.ingest-switch.is-on {
+  background: var(--sa-accent);
+  border-color: var(--sa-accent);
+}
+.ingest-switch.is-on i {
+  left: 18px;
+  background: #fff;
+}
+.ingest-cfg-usage {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--sa-subtle);
+  font-size: 11.5px;
+  color: var(--sa-text-secondary);
+}
+.ingest-cfg-usage-text strong {
+  color: var(--sa-text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.ingest-cfg-run {
+  flex: none;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 9999px;
+  border: 1px solid var(--sa-border);
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.ingest-cfg-run:first-of-type {
+  margin-left: auto;
+}
+.ingest-cfg-run:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.incoming-rebuild {
+  width: auto;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+}
+.incoming-rebuild:hover {
+  color: var(--sa-text-primary);
+}
+/* ===== Agent 清单面板（右侧）===== */
+.agent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.agent-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.agent-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sa-text-primary);
+}
+.agent-run-btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  border: none;
+  background: var(--sa-text-primary);
+  color: var(--sa-bg);
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.16s ease;
+}
+.agent-run-btn:hover:not(:disabled) {
+  opacity: 0.88;
+}
+.agent-run-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.agent-empty {
+  padding: 28px 20px;
+  border: 1px dashed var(--sa-border);
+  border-radius: 14px;
+  text-align: center;
+  color: var(--sa-text-secondary);
+  font-size: 12.5px;
+}
+.agent-empty p {
+  margin: 0 0 6px;
+}
+.agent-empty-hint {
+  color: var(--sa-text-tertiary);
+  font-size: 11.5px;
+}
+.agent-run-meta {
+  margin: -2px 0 10px;
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 </style>
 
 <style scoped>
@@ -2447,6 +2251,80 @@ onMounted(() => {
     padding: 10px;
   }
 }
+
+/* ===== 拟入库清单（skill 模式） ===== */
+.batch-sheet {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--sa-border-subtle);
+  border-radius: 16px;
+  background: var(--sa-elevated);
+}
+.batch-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+  margin-bottom: 10px;
+}
+.batch-sheet-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sa-text-primary);
+}
+.batch-sheet-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--sa-accent-subtle);
+  color: var(--sa-accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.batch-sheet-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px 20px;
+}
+@media (min-width: 768px) {
+  .batch-sheet-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.batch-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.batch-row > span {
+  flex-shrink: 0;
+  width: 62px;
+  color: var(--sa-text-tertiary);
+}
+.batch-row > b {
+  min-width: 0;
+  font-weight: 500;
+  color: var(--sa-text-primary);
+  overflow-wrap: anywhere;
+}
+.batch-row--wide {
+  grid-column: 1 / -1;
+}
+.batch-sheet-foot {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--sa-border-subtle);
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+}
+
 </style>
 
 
@@ -2480,7 +2358,22 @@ onMounted(() => {
                 <transition name="list-fade">
                   <div v-if="incomingOpen" class="incoming-list">
                     <div class="incoming-list-head">
-                      <span>待整理视频</span>
+                      <span class="incoming-tabs">
+                        <button
+                          v-for="t in [
+                            { key: 'files', label: '文件' },
+                            { key: 'batches', label: '批次' },
+                            { key: 'reports', label: '报告' },
+                          ] as const"
+                          :key="t.key"
+                          type="button"
+                          class="incoming-tab"
+                          :class="{ 'is-active': incomingTab === t.key }"
+                          @click="switchIncomingTab(t.key)"
+                        >
+                          {{ t.label }}
+                        </button>
+                      </span>
                       <span class="incoming-head-tools">
                         <select v-model="incomingSort" class="incoming-sort" aria-label="列表排序">
                           <option v-for="o in INCOMING_SORT_OPTIONS" :key="o.value" :value="o.value">
@@ -2495,13 +2388,22 @@ onMounted(() => {
                         >
                           <RefreshOutlined :size="13" />
                         </button>
+                        <button
+                          class="incoming-refresh incoming-rebuild"
+                          type="button"
+                          title="清空缓存并重建待整理索引（不动磁盘文件）"
+                          :disabled="incomingLoading"
+                          @click="rebuildIncomingIndex"
+                        >
+                          重建索引
+                        </button>
                       </span>
                     </div>
-                    <div v-if="incomingLoading" class="incoming-empty">正在扫描…</div>
-                    <div v-else-if="!incomingList.length" class="incoming-empty">
+                    <div v-if="incomingTab === 'files' && incomingLoading" class="incoming-empty">正在扫描…</div>
+                    <div v-else-if="incomingTab === 'files' && !incomingList.length" class="incoming-empty">
                       暂无待整理文件，点击「扫描目录」检查新素材
                     </div>
-                    <ul v-else class="incoming-items">
+                    <ul v-else-if="incomingTab === 'files'" class="incoming-items">
                       <li
                         v-for="item in incomingSorted"
                         :key="item.path"
@@ -2538,6 +2440,65 @@ onMounted(() => {
                         </span>
                       </li>
                     </ul>
+
+                    <!-- 批次视图（imflow 批次状态 + 一键核对） -->
+                    <div v-else-if="incomingTab === 'batches'" class="ai2-batches">
+                      <div v-if="batchLoading" class="incoming-empty">正在读取批次…</div>
+                      <div v-else-if="!batches.length" class="incoming-empty">
+                        没有找到 imflow 批次（检查设置里的 imflow 目录）
+                      </div>
+                      <template v-else>
+                        <div v-for="b in batches" :key="b.batch" class="ai2-batch-row">
+                          <div class="ai2-batch-main">
+                            <span class="ai2-batch-name">{{ b.batch }}</span>
+                            <span class="ai2-batch-meta">
+                              {{ b.kind || '—' }} · 计划 {{ b.planned_items ?? 0 }} 条
+                              <template v-if="b.archived"> · 已归档</template>
+                            </span>
+                          </div>
+                          <span class="ai2-batch-chips">
+                            <span class="ai2-chip" :class="b.has_plan ? 'is-on' : ''">plan</span>
+                            <span class="ai2-chip" :class="b.has_verify ? 'is-on' : ''">verify</span>
+                          </span>
+                          <button
+                            class="sa-btn sa-btn--primary"
+                            type="button"
+                            :disabled="auditBatchName === b.batch"
+                            @click="runBatchAudit(b)"
+                          >
+                            {{ auditBatchName === b.batch ? '核对中…' : '跑核对' }}
+                          </button>
+                        </div>
+                        <div v-if="auditResult" class="ai2-audit-result">
+                          <b>{{ auditResult.name }}（{{ auditResult.status }}，{{ auditResult.duration_ms }}ms）</b>
+                          <ul>
+                            <li v-for="(st, i) in auditResult.steps" :key="i" :class="{ ok: st.ok, bad: !st.ok }">
+                              {{ st.step }} — {{ st.detail }}
+                            </li>
+                          </ul>
+                          <p v-if="auditResult.result?.report" class="ai2-audit-report">
+                            报告：<a href="#" @click.prevent="openReport(auditResult.result!.report!)">
+                              {{ auditResult.result.report }}
+                            </a>
+                          </p>
+                        </div>
+                      </template>
+                    </div>
+
+                    <!-- 报告视图 -->
+                    <div v-else-if="incomingTab === 'reports'" class="ai2-reports">
+                      <div v-if="!reports.length" class="incoming-empty">还没有报告。跑一次核对或添加任务后会生成。</div>
+                      <button
+                        v-for="r in reports"
+                        :key="r.file"
+                        type="button"
+                        class="ai2-report-row"
+                        @click="openReport(r.file)"
+                      >
+                        <span class="ai2-report-name">{{ r.file }}</span>
+                        <span class="ai2-report-size">{{ formatFileSize(r.size) }}</span>
+                      </button>
+                    </div>
                   </div>
                 </transition>
               </template>
@@ -2664,7 +2625,7 @@ onMounted(() => {
                     </template>
                   </div>
 
-                  <!-- 右：编辑元数据 -->
+                  <!-- 右：Agent 清单 / 编辑元数据 -->
                   <div class="detail-right">
                     <div class="form-card">
                       <div class="form-title form-title--with-action">
@@ -2755,6 +2716,31 @@ onMounted(() => {
                       <div class="form-field">
                         <span class="form-label">舞台 / 活动</span>
                         <input v-model="detailForm.event_name" class="sa-input" type="text" placeholder="如 XX 艺术节、XX 校庆、XX 电视台节目等，AI 判断后填入" />
+                      </div>
+                      <div class="form-grid-2">
+                        <div class="form-field">
+                          <span class="form-label">机位</span>
+                          <SaSelect
+                            v-model="detailForm.camera_angle"
+                            :options="CAMERA_ANGLE_OPTIONS"
+                            placeholder="留空 = 未标注"
+                          />
+                          <div class="field-hint">
+                            词表外的机位写法（如 OnePick Cam / SideCam）会被后端拦下，确认后再扩充词表。
+                          </div>
+                        </div>
+                        <div class="form-field">
+                          <span class="form-label">场次</span>
+                          <input
+                            v-model="detailForm.session_label"
+                            class="sa-input"
+                            type="text"
+                            :placeholder="autoSessionLabel ? `留空自动生成：${autoSessionLabel}` : 'YYMMDD - 活动名'"
+                          />
+                          <div class="field-hint">
+                            格式「YYMMDD - 活动名」；留空按表演日期 + 活动名（缺失回退频道名）自动生成。
+                          </div>
+                        </div>
                       </div>
                       <div class="form-field hit-accent">
                         <span class="form-label">曲目</span>
@@ -2926,31 +2912,19 @@ onMounted(() => {
                       </div>
                       <div class="form-actions">
                         <button
-                          :class="['sa-btn', 'sa-btn--ai', 'sa-btn--icon', { 'is-busy': albumAiLoading }]"
+                          class="sa-btn"
                           type="button"
-                          :title="albumAiLoading ? 'AI 搜索中…' : '专辑搜索'"
-                          :aria-label="albumAiLoading ? 'AI 搜索中…' : '专辑搜索'"
-                          :disabled="albumAiLoading || aiLoading"
-                          @click="aiSearchAlbum"
+                          :disabled="aiSuggLoading || ingesting"
+                          title="ai2 建议：草稿 + 独立核验，只填空白字段，不写库"
+                          @click="suggestWithAi2"
                         >
-                          <LoadingOutlined v-if="albumAiLoading" :size="14" />
-                          <SearchOutlined v-else :size="14" />
-                        </button>
-                        <button
-                          :class="['sa-btn', 'sa-btn--ai', 'sa-btn--icon', { 'is-busy': aiLoading }]"
-                          type="button"
-                          :title="aiLoading ? 'AI 生成中…' : 'AI 填写'"
-                          :aria-label="aiLoading ? 'AI 生成中…' : 'AI 填写'"
-                          :disabled="aiLoading"
-                          @click="aiIngest"
-                        >
-                          <LoadingOutlined v-if="aiLoading" :size="14" />
-                          <RobotOutlined v-else :size="14" />
+                          {{ aiSuggLoading ? '建议中…' : 'ai2 建议' }}
                         </button>
                         <button class="sa-btn sa-btn--primary" :disabled="ingesting" @click="confirmIngest">
                           {{ ingesting ? '入库中…' : '确认入库' }}
                         </button>
                       </div>
+
                     </div>
                   </div>
                 </div>
@@ -2991,7 +2965,7 @@ onMounted(() => {
                   </div>
                   <template #footer>
                     <div class="modal-actions">
-                      <n-button @click="destDirOpen = false">取消</n-button>
+                      <button class="sa-btn" type="button" @click="destDirOpen = false">取消</button>
                     </div>
                   </template>
                 </n-modal>
@@ -3017,10 +2991,10 @@ onMounted(() => {
               </n-form>
               <template #footer>
                 <div class="modal-actions">
-                  <n-button @click="albumCreateShow = false">取消</n-button>
-                  <n-button type="primary" :loading="albumCreating" @click="submitAlbumCreate">
+                  <button class="sa-btn" type="button" @click="albumCreateShow = false">取消</button>
+                  <button class="sa-btn sa-btn--primary" type="button" :disabled="albumCreating" @click="submitAlbumCreate">
                     创建并关联
-                  </n-button>
+                  </button>
                 </div>
               </template>
             </n-modal>
@@ -3042,10 +3016,10 @@ onMounted(() => {
               </n-form>
               <template #footer>
                 <div class="modal-actions">
-                  <n-button @click="artistCreateShow = false">取消</n-button>
-                  <n-button type="primary" :loading="artistCreating" @click="submitArtistCreate">
+                  <button class="sa-btn" type="button" @click="artistCreateShow = false">取消</button>
+                  <button class="sa-btn sa-btn--primary" type="button" :disabled="artistCreating" @click="submitArtistCreate">
                     创建并关联
-                  </n-button>
+                  </button>
                 </div>
               </template>
             </n-modal>
@@ -3067,10 +3041,10 @@ onMounted(() => {
               </n-form>
               <template #footer>
                 <div class="modal-actions">
-                  <n-button @click="groupCreateShow = false">取消</n-button>
-                  <n-button type="primary" :loading="groupCreating" @click="submitGroupCreate">
+                  <button class="sa-btn" type="button" @click="groupCreateShow = false">取消</button>
+                  <button class="sa-btn sa-btn--primary" type="button" :disabled="groupCreating" @click="submitGroupCreate">
                     创建并关联
-                  </n-button>
+                  </button>
                 </div>
               </template>
             </n-modal>
@@ -3108,10 +3082,10 @@ onMounted(() => {
               </n-spin>
               <template #footer>
                 <div class="modal-actions">
-                  <n-button @click="closeArtistFuzzy('skip')">取消</n-button>
-                  <n-button quaternary @click="closeArtistFuzzy('create')">
+                  <button class="sa-btn" type="button" @click="closeArtistFuzzy('skip')">取消</button>
+                  <button class="sa-btn" type="button" @click="closeArtistFuzzy('create')">
                     都不是，保留为待新建
-                  </n-button>
+                  </button>
                 </div>
               </template>
             </n-modal>
@@ -3147,10 +3121,10 @@ onMounted(() => {
               </n-spin>
               <template #footer>
                 <div class="modal-actions">
-                  <n-button @click="closeAlbumFuzzy('skip')">取消</n-button>
-                  <n-button quaternary @click="closeAlbumFuzzy('create')">
+                  <button class="sa-btn" type="button" @click="closeAlbumFuzzy('skip')">取消</button>
+                  <button class="sa-btn" type="button" @click="closeAlbumFuzzy('create')">
                     都不是，保留为待新建
-                  </n-button>
+                  </button>
                 </div>
               </template>
             </n-modal>
@@ -3188,10 +3162,10 @@ onMounted(() => {
               </n-spin>
               <template #footer>
                 <div class="modal-actions">
-                  <n-button @click="closeSongFuzzy('skip')">取消</n-button>
-                  <n-button quaternary @click="closeSongFuzzy('create')">
+                  <button class="sa-btn" type="button" @click="closeSongFuzzy('skip')">取消</button>
+                  <button class="sa-btn" type="button" @click="closeSongFuzzy('create')">
                     都不是，保留为待新建
-                  </n-button>
+                  </button>
                 </div>
               </template>
             </n-modal>
@@ -3229,87 +3203,36 @@ onMounted(() => {
               </n-spin>
               <template #footer>
                 <div class="modal-actions">
-                  <n-button @click="closeGroupFuzzy('skip')">取消</n-button>
-                  <n-button quaternary @click="closeGroupFuzzy('create')">
+                  <button class="sa-btn" type="button" @click="closeGroupFuzzy('skip')">取消</button>
+                  <button class="sa-btn" type="button" @click="closeGroupFuzzy('create')">
                     都不是，保留为待新建
-                  </n-button>
+                  </button>
                 </div>
               </template>
             </n-modal>
 
-            <!-- AI 专辑识别结果（根据歌曲名 + 组合/艺人名判断所属专辑） -->
-            <n-modal
-              v-model:show="albumAiOpen"
-              preset="card"
-              title="AI 专辑识别结果"
-              :style="{ width: 'min(480px, calc(100vw - 24px))' }"
-            >
-              <p v-if="albumAiMulti.length && albumAiInfo.performer" class="album-ai-ident">
-                表演者：{{ albumAiInfo.performer }}
-              </p>
-              <template v-if="albumAiMulti.length">
-                <div v-for="m in albumAiMulti" :key="m.song" class="album-ai-group">
-                  <p class="album-ai-group-title">{{ m.song }}</p>
-                  <div class="fuzzy-list">
-                    <div v-for="name in m.albums" :key="name" class="album-ai-item">
-                      <span class="album-ai-name">{{ name }}</span>
-                      <button
-                        class="sa-btn sa-btn--ai album-ai-link"
-                        @click="albumAiLink(name, m.song)"
-                      >
-                        <SearchOutlined :size="13" />
-                        搜索并关联
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </template>
-              <template v-else>
-                <p v-if="albumAiInfo.song || albumAiInfo.performer" class="album-ai-ident">
-                  <template v-if="albumAiInfo.song">歌曲：{{ albumAiInfo.song }}</template>
-                  <template v-if="albumAiInfo.performer"> · 表演者：{{ albumAiInfo.performer }}</template>
-                </p>
-                <p v-if="albumAiNames.length" class="fuzzy-hint">
-                  该歌曲可能收录于以下专辑：
-                </p>
-                <p v-else class="fuzzy-hint">
-                  AI 已识别出歌曲信息，但未能确定所属专辑，可点击下方搜索或稍后手动关联。
-                </p>
-                <div v-if="albumAiNames.length" class="fuzzy-list">
-                  <div
-                    v-for="name in albumAiNames"
-                    :key="name"
-                    class="album-ai-item"
-                  >
-                    <span class="album-ai-name">{{ name }}</span>
-                    <button
-                      class="sa-btn sa-btn--ai album-ai-link"
-                      @click="albumAiLink(name)"
-                    >
-                      <SearchOutlined :size="13" />
-                      搜索并关联
-                    </button>
-                  </div>
-                </div>
-              </template>
-              <div v-if="albumAiSources.length" class="ai-source-block">
-                <p class="ai-source-title">来源核对</p>
-                <div
-                  v-for="(s, i) in albumAiSources"
-                  :key="`${s.field}-${s.value}-${i}`"
-                  class="ai-source-item"
-                >
-                  <span class="ai-source-field">{{ s.field }}</span>
-                  <span class="ai-source-value">{{ s.value }}</span>
-                  <span class="ai-source-src">{{ s.source }}</span>
-                </div>
-              </div>
-              <template #footer>
-                <div class="modal-actions">
-                  <n-button @click="albumAiOpen = false">关闭</n-button>
-                </div>
-              </template>
-            </n-modal>
+    <!-- ai2 报告预览（HTML 隔离渲染） -->
+    <n-modal
+      :show="!!reportPreview"
+      preset="card"
+      :title="reportPreview?.file || '报告'"
+      :style="{ width: 'min(920px, calc(100vw - 24px))' }"
+      @update:show="(v: boolean) => { if (!v) reportPreview = null }"
+    >
+      <div v-if="reportLoading" class="incoming-empty">加载中…</div>
+      <iframe
+        v-else-if="reportPreview"
+        :srcdoc="reportPreview.html"
+        class="ai2-report-frame"
+        sandbox=""
+        title="ai2 报告"
+      />
+      <template #footer>
+        <div class="modal-actions">
+          <button class="sa-btn" type="button" @click="reportPreview = null">关闭</button>
+        </div>
+      </template>
+    </n-modal>
 
     <!-- 信息预览卡（v3.5.4）：HeroUI 风格大圆角卡片 + 宽松排版 ——
          展示右侧表单的填写内容（入库时写入什么，这里就显示什么），
@@ -3336,4 +3259,11 @@ onMounted(() => {
         </div>
       </div>
     </Teleport>
+
+  <Ai2SuggestDrawer
+    v-model:show="suggestOpen"
+    :run-id="suggestRunId"
+    :current="detailForm as unknown as Record<string, unknown>"
+    @adopt="applyAi2Suggestion"
+  />
 </template>

@@ -112,23 +112,31 @@ def _has_library_video(id_col, link_table, fk_col: str):
     )
 
 
-def _pick_entities(db: Session, model, link_table, fk_col: str, limit: int) -> list:
-    """随机挑选主舞台实体：必须有头像 + 有关联视频，排除 hide_from_home 与软删除。
+def _pick_entities(
+    db: Session, model, link_table, fk_col: str, limit: int, featured_only: bool = True
+) -> list:
+    """随机挑选主舞台实体：必须有竖版海报或横幅之一，排除软删除。
+
+    featured_only=True（默认）：只从「已加入轮动」的实体里抽 —— 开关改为
+    opt-in 后，未在设置页「艺人展示」勾选的一律不进池。
+    featured_only=False：兜底用的旧自动池 ——「有海报 + 有关联视频」，
+    仅在一个都没勾选时启用，避免首页主视觉空窗。
 
     「有关联视频」在做随机抽取前就下推到 SQL（EXISTS），
     否则先抽后过滤会让轮播帧数不足，且空壳实体占用名额。
     """
+    # 原则一：只轮动有竖屏海报（= 头像 avatar_path）的实体；只有横幅的不进池
+    where = [
+        model.deleted_at.is_(None),
+        model.avatar_path.is_not(None),
+    ]
+    if featured_only:
+        where.append(model.featured_in_home.is_(True))
+    else:
+        where.append(_has_library_video(model.id, link_table, fk_col))
     return list(
         db.scalars(
-            select(model)
-            .where(
-                model.deleted_at.is_(None),
-                model.hide_from_home.is_(False),
-                model.avatar_path.is_not(None),
-                _has_library_video(model.id, link_table, fk_col),
-            )
-            .order_by(func.random())
-            .limit(limit)
+            select(model).where(*where).order_by(func.random()).limit(limit)
         ).all()
     )
 
@@ -233,10 +241,11 @@ def hero_stage(
     db: Session = Depends(get_db),
     limit: int = Query(HERO_STAGE_LIMIT, ge=1, le=12),
 ):
-    """随机抽取「有头像 + 有关联视频」的艺人与组合，组装主舞台轮播帧。
+    """随机抽取「已加入轮动」的艺人与组合，组装主舞台轮播帧。
 
-    只从有关联视频的实体里随机，避免轮播到空壳资料页；
-    排除 hide_from_home 与软删除。全库都没有合格实体时返回空列表，
+    轮动池改为 opt-in：只有设置页「艺人展示」勾选过的实体才进池，且必须有
+    竖版海报或横幅之一。一个都没勾选时回退到旧自动池（有海报 + 有关联视频），
+    避免首页主视觉空窗；全库都没有合格实体时返回空列表，
     前端会自动回退成视频轮播。
     """
     # 两次抽取各自放宽到 limit，再交替取用：
@@ -244,6 +253,13 @@ def hero_stage(
     # 时自动由另一侧补齐，不会出现「只有 4 帧」的半空轮播。
     artists = _pick_entities(db, Artist, music_video_artists, "artist_id", limit)
     groups = _pick_entities(db, Group, music_video_groups, "group_id", limit)
+    if not artists and not groups:
+        artists = _pick_entities(
+            db, Artist, music_video_artists, "artist_id", limit, featured_only=False
+        )
+        groups = _pick_entities(
+            db, Group, music_video_groups, "group_id", limit, featured_only=False
+        )
     pool: list[tuple[str, Any]] = []
     ai = gi = 0
     take_artist = random.random() < 0.5

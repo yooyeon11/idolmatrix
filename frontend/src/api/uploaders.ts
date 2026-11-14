@@ -6,12 +6,16 @@ export interface UploaderItem {
   platform?: string | null
   video_count: number
   latest_video_id?: number | null
+  /** 最近入库的视频 id（最多 16 条，列表页 4×4 海报墙用） */
+  recent_video_ids?: number[]
   /** 已固定的视频类型（空 = 跟随 AI 判断） */
   video_types?: string[]
   /** false = 仅存在于规则里，库内还没有 TA 的作品 */
   in_library?: boolean
   /** YouTube 缺失检测配置（来自博主规则） */
   youtube_channel_url?: string
+  /** 解析出的频道 ID（UC…） */
+  youtube_channel_id?: string
   missing_check_enabled?: boolean
   /** 缺失检测统计（快照汇总；未检测过为 null） */
   channel_video_total?: number | null
@@ -36,7 +40,9 @@ export interface UploaderRule {
   video_types: string[]
   /** YouTube 频道地址 / ID（@handle、/channel/UC… 链接或裸 UC ID） */
   youtube_channel_url?: string
-  /** 是否启用缺失视频检测 */
+  /** 解析出的频道 ID（UC…）；改名后按它归组 */
+  youtube_channel_id?: string
+  /** 是否启用缺失视频检测（默认关闭，不随地址自动勾选） */
   missing_check_enabled?: boolean
 }
 
@@ -53,6 +59,21 @@ export interface MissingVideoItem {
   is_short: boolean
   thumbnail_path?: string | null
   url: string
+}
+
+export interface ChannelBackfillStats {
+  scanned: number
+  updated: number
+  no_file: number
+  no_sidecar: number
+  no_channel_id: number
+  errors: number
+  dry_run: boolean
+}
+
+export interface ChannelBackfillResult {
+  videos: ChannelBackfillStats
+  rules: { rules: number; updated: number; skipped: number; errors: number }
 }
 
 /** 缺失视频报告：频道全集快照 − 库内该博主 YouTube 视频 */
@@ -100,6 +121,15 @@ export const uploadersApi = {
   missingVideos(uploader: string) {
     return http
       .get<MissingReport>('/uploaders/missing-videos', { params: { uploader } })
+      .then((r) => r.data)
+  },
+  /** 从 .info.json 侧车回填库内视频的 YouTube channel_id（可顺带探测规则频道） */
+  backfillChannelIds(payload: { dry_run?: boolean; include_rules?: boolean } = {}) {
+    return http
+      .post<ChannelBackfillResult>('/uploaders/backfill-channel-ids', payload, {
+        // 3k+ 条侧车逐条读顶层 JSON，实测会超过默认 30s；给足 10 分钟
+        timeout: 600_000,
+      })
       .then((r) => r.data)
   },
   /** 触发一次缺失检测（拉频道完整投稿 → 返回缺失报告） */

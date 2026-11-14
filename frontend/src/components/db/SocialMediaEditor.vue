@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { aiApi } from '@/api/ai'
 import { LinkOutlined } from '@/components/icons'
 
 const props = defineProps<{
@@ -29,12 +28,6 @@ const KNOWN = [
 type Row = { key: string; label: string; url: string; custom?: boolean }
 
 const rows = ref<Row[]>([])
-const error = ref('')
-const proposeOpen = ref(false)
-const proposeBusy = ref(false)
-const proposeBasis = ref('')
-const proposeLinks = ref<{ key: string; label: string; url: string; checked: boolean }[]>([])
-
 function labelOf(key: string) {
   return KNOWN.find((k) => k.key === key)?.label || key
 }
@@ -86,91 +79,14 @@ function addCustom() {
   rows.value = [...rows.value, { key: '', label: '自定义', url: '', custom: true }]
 }
 
-async function searchSocial() {
-  proposeBusy.value = true
-  proposeOpen.value = true
-  proposeBasis.value = ''
-  proposeLinks.value = []
-  error.value = ''
-  try {
-    const r = await aiApi.suggestSocial({
-      entity_type: props.entityType,
-      entity_id: props.entityId,
-      use_saved_ingest_ai: true,
-    })
-    proposeBasis.value = r.basis || ''
-    const links = r.links || {}
-    proposeLinks.value = Object.entries(links).map(([key, url]) => ({
-      key,
-      label: labelOf(key),
-      url: String(url),
-      checked: true,
-    }))
-    if (!proposeLinks.value.length) {
-      error.value = '未找到可用的社交媒体链接，可稍后重试或手动填写'
-    }
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '社交媒体搜索失败'
-  } finally {
-    proposeBusy.value = false
-  }
-}
-
-function applyProposed() {
-  const picked = proposeLinks.value.filter((p) => p.checked && p.url.trim())
-  if (!picked.length) {
-    proposeOpen.value = false
-    return
-  }
-  const map = toMap()
-  for (const p of picked) {
-    const key = p.key === 'twitter' ? 'x' : p.key
-    map[key] = p.url.trim()
-  }
-  hydrate(map)
-  emit('update:modelValue', map)
-  emit('save', map)
-  proposeOpen.value = false
-}
-
 const hasRows = computed(() => rows.value.length > 0)
 </script>
 
 <template>
   <div class="social-ed">
     <div class="social-toolbar">
-      <button type="button" class="social-search" :disabled="disabled || proposeBusy" @click="searchSocial">
-        {{ proposeBusy ? '搜索中…' : '搜索社交媒体' }}
-      </button>
       <button type="button" class="social-add" :disabled="disabled" @click="addCustom">自定义平台</button>
     </div>
-    <div v-if="error" class="social-error">{{ error }}</div>
-
-    <div v-if="proposeOpen" class="social-propose">
-      <div class="propose-head">
-        <b>AI 提议的社交链接</b>
-        <span v-if="proposeBasis" class="propose-basis">{{ proposeBasis }}</span>
-      </div>
-      <div v-if="proposeBusy" class="propose-empty">正在搜索…</div>
-      <div v-else-if="!proposeLinks.length" class="propose-empty">暂无提议</div>
-      <label v-for="(p, i) in proposeLinks" :key="p.key + i" class="propose-row">
-        <input v-model="p.checked" type="checkbox" />
-        <span class="propose-label">{{ p.label }}</span>
-        <a class="propose-url" :href="p.url" target="_blank" rel="noopener noreferrer">{{ p.url }}</a>
-      </label>
-      <div class="propose-actions">
-        <button type="button" class="social-add" @click="proposeOpen = false">取消</button>
-        <button
-          type="button"
-          class="social-search primary"
-          :disabled="!proposeLinks.some((p) => p.checked)"
-          @click="applyProposed"
-        >
-          应用所选
-        </button>
-      </div>
-    </div>
-
     <div v-if="hasRows" class="social-rows">
       <div v-for="(r, idx) in rows" :key="idx" class="social-row">
         <input
@@ -237,52 +153,6 @@ const hasRows = computed(() => rows.value.length > 0)
 .social-add:disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-.social-error {
-  color: var(--dh-bad, #f07178);
-  font-size: 12px;
-}
-.social-propose {
-  border: 1px solid var(--sa-border-subtle, rgba(255, 255, 255, 0.08));
-  border-radius: 12px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.propose-head {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-}
-.propose-basis {
-  color: var(--sa-text-secondary, #9898a8);
-  font-size: 12px;
-}
-.propose-empty {
-  font-size: 12px;
-  color: var(--sa-text-secondary, #9898a8);
-}
-.propose-row {
-  display: grid;
-  grid-template-columns: auto 72px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  font-size: 12px;
-}
-.propose-url {
-  color: var(--sa-accent, #0485f7);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.propose-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-top: 4px;
 }
 .social-rows {
   display: flex;

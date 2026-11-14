@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import SaHeader from '@/components/SaHeader.vue'
+import SaFilterBar from '@/components/SaFilterBar.vue'
+import SaFilterSearch from '@/components/SaFilterSearch.vue'
 import SaPagination from '@/components/SaPagination.vue'
 import { uploadersApi, type UploaderItem } from '@/api/uploaders'
 import { musicVideosApi } from '@/api/musicVideos'
 import { useSettingsStore } from '@/stores/settings'
 import { VideoLibraryOutlined } from '@/components/icons'
-import { IMG_W_CARD } from '@/utils/imageSizes'
+import { IMG_W_THUMB } from '@/utils/imageSizes'
 
 const router = useRouter()
 const settings = useSettingsStore()
@@ -55,21 +57,100 @@ function goUploader(u: UploaderItem) {
   router.push({ path: `/uploaders/${encodeURIComponent(u.name)}` })
 }
 
-function coverUrl(u: UploaderItem) {
-  if (!settings.showCovers || !u.latest_video_id || brokenThumbs.value.has(u.latest_video_id)) {
-    return undefined
-  }
-  return musicVideosApi.thumbnailUrl(u.latest_video_id, undefined, IMG_W_CARD)
-}
-function onCoverError(u: UploaderItem) {
-  if (u.latest_video_id) brokenThumbs.value = new Set(brokenThumbs.value).add(u.latest_video_id)
-}
+// ===== 悬停就地展开的 4×4 海报墙（方案 A）=====
+// 16 张缩略图只在首次悬停该卡时挂载，避免一进页面就发几百个图片请求。
+// ⚠ 悬停有意延迟 400ms 才展开（hover intent）：
+//    浏览时鼠标常从卡片上滑过，立即展开会不断"弹开/收起"，既闪又容易误点。
+//    移出立刻取消计时；键盘 focus 视为明确意图，仍然即时展开。
+const HOVER_DELAY = 400
+const mounted = ref<Set<string>>(new Set())
+const active = ref<Set<string>>(new Set())
+const hoverTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const tilePalettes: [string, string][] = [
+  ['#2b2350', '#5b2a63'],
+  ['#123a4d', '#1f6b73'],
+  ['#4a1f2c', '#8a3450'],
+  ['#2f2a16', '#6d5a22'],
+  ['#1d2b4d', '#2f4f8a'],
+  ['#3a2144', '#7a3a8a'],
+  ['#103a33', '#1f6b5c'],
+  ['#46251a', '#8a4a2c'],
+]
 
-function initialOf(u: UploaderItem) {
-  return (u.name || '?').trim().charAt(0).toUpperCase()
+function keyOf(u: UploaderItem) {
+  return `${u.name}::${u.platform || ''}`
+}
+/** 真正展开：挂载宫格 + 打开抽屉 */
+function openWall(k: string) {
+  if (!mounted.value.has(k)) mounted.value = new Set(mounted.value).add(k)
+  if (!active.value.has(k)) active.value = new Set(active.value).add(k)
+}
+/** 鼠标进入：起一个 400ms 计时器，期间移出会被取消 */
+function reveal(u: UploaderItem) {
+  const k = keyOf(u)
+  if (active.value.has(k) || hoverTimers.has(k)) return
+  hoverTimers.set(
+    k,
+    setTimeout(() => {
+      hoverTimers.delete(k)
+      openWall(k)
+    }, HOVER_DELAY),
+  )
+}
+/** 键盘 focus：明确意图，不延迟 */
+function revealNow(u: UploaderItem) {
+  cancelReveal(u)
+  openWall(keyOf(u))
+}
+function cancelReveal(u: UploaderItem) {
+  const k = keyOf(u)
+  const t = hoverTimers.get(k)
+  if (t) {
+    clearTimeout(t)
+    hoverTimers.delete(k)
+  }
+}
+/** 移出即收起（宫格继续挂载，避免反复请求缩略图） */
+function conceal(u: UploaderItem) {
+  cancelReveal(u)
+  const k = keyOf(u)
+  if (active.value.has(k)) {
+    const next = new Set(active.value)
+    next.delete(k)
+    active.value = next
+  }
+}
+/** 海报墙用的视频 id：优先最近 16 条，老接口没有该字段时退回最新一条 */
+function mosaic(u: UploaderItem): number[] {
+  const ids = u.recent_video_ids?.length
+    ? u.recent_video_ids
+    : u.latest_video_id
+      ? [u.latest_video_id]
+      : []
+  return ids.slice(0, 16)
+}
+function tileStyle(id: number) {
+  const [c1, c2] = tilePalettes[id % tilePalettes.length]
+  return { background: `linear-gradient(135deg, ${c1}, ${c2})` }
+}
+function tileUrl(id: number) {
+  if (!settings.showCovers || brokenThumbs.value.has(id)) return ''
+  return musicVideosApi.thumbnailUrl(id, undefined, IMG_W_THUMB)
+}
+function onTileError(id: number) {
+  brokenThumbs.value = new Set(brokenThumbs.value).add(id)
+}
+function countLabel(u: UploaderItem) {
+  return u.channel_video_total != null
+    ? `${u.video_count}/${u.channel_video_total}`
+    : String(u.video_count)
 }
 
 onMounted(() => load(1))
+onBeforeUnmount(() => {
+  hoverTimers.forEach((t) => clearTimeout(t))
+  hoverTimers.clear()
+})
 </script>
 
 <template>
@@ -81,12 +162,9 @@ onMounted(() => load(1))
           <h1 class="page-title">博主</h1>
           <span class="page-count">{{ total }}</span>
         </div>
-        <input
-          v-model="searchInput"
-          class="search-input"
-          type="text"
-          placeholder="搜索博主（频道）…"
-        />
+        <SaFilterBar>
+          <SaFilterSearch v-model="searchInput" placeholder="搜索博主（频道）…" aria-label="检索博主" width="200px" />
+        </SaFilterBar>
       </div>
 
       <div v-if="loading && !items.length" class="list-loading">加载中…</div>
@@ -95,36 +173,46 @@ onMounted(() => load(1))
         <div class="uploader-grid">
           <div
             v-for="u in items"
-            :key="u.name + (u.platform || '')"
+            :key="keyOf(u)"
             class="uploader-card"
+            tabindex="0"
             @click="goUploader(u)"
+            @mouseenter="reveal(u)"
+            @mouseleave="conceal(u)"
+            @focusin="revealNow(u)"
+            @focusout="conceal(u)"
           >
-            <div class="uploader-cover">
-              <img
-                v-if="coverUrl(u)"
-                :src="coverUrl(u)!"
-                :alt="u.name"
-                class="uploader-img"
-                loading="lazy"
-                @error="onCoverError(u)"
-              />
-              <div v-else class="uploader-placeholder">
-                <span class="uploader-initial">{{ initialOf(u) }}</span>
+            <div class="up-head">
+              <div class="up-id">
+                <h3 class="up-name" :title="u.name">{{ u.name }}</h3>
+                <div class="up-sub">
+                  <span v-if="u.platform" class="up-platform">{{ u.platform }}</span>
+                  <span v-if="u.missing_count" class="up-missing">缺 {{ u.missing_count }}</span>
+                </div>
               </div>
-              <div class="uploader-icon">
-                <VideoLibraryOutlined :size="14" />
+              <div class="up-count">
+                <b>{{ countLabel(u) }}</b>
+                <span>部</span>
               </div>
             </div>
-            <div class="uploader-name" :title="u.name">{{ u.name }}</div>
-            <div class="uploader-meta">
-              <span class="uploader-count">
-                <template v-if="u.channel_video_total != null">
-                  {{ u.video_count }}/{{ u.channel_video_total }} 个视频
-                </template>
-                <template v-else>{{ u.video_count }} 个视频</template>
-              </span>
-              <span v-if="u.missing_count" class="uploader-missing">缺 {{ u.missing_count }}</span>
-              <span v-if="u.platform" class="uploader-platform">{{ u.platform }}</span>
+
+            <div
+              v-if="mosaic(u).length"
+              class="poster-wall"
+              :class="{ 'poster-wall--open': active.has(keyOf(u)) }"
+              aria-hidden="true"
+            >
+              <div v-if="mounted.has(keyOf(u))" class="poster-grid">
+                <div v-for="id in mosaic(u)" :key="id" class="poster-tile" :style="tileStyle(id)">
+                  <img
+                    v-if="tileUrl(id)"
+                    :src="tileUrl(id)"
+                    alt=""
+                    loading="lazy"
+                    @error="onTileError(id)"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -152,9 +240,9 @@ onMounted(() => load(1))
   min-height: 100vh;
 }
 .mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px 64px;
+  padding: 0 var(--sa-gutter, 36px) 64px;
 }
 .page-head {
   display: flex;
@@ -187,112 +275,130 @@ onMounted(() => load(1))
   border: 1px solid var(--sa-border-subtle);
   line-height: 1.6;
 }
-.search-input {
-  width: 240px;
-  padding: 9px 16px;
-  border-radius: 9999px;
-  border: 1px solid var(--sa-border-subtle);
-  background: var(--sa-elevated);
-  color: var(--sa-text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-.search-input:focus {
-  border-color: var(--sa-accent);
-}
-.search-input::placeholder {
-  color: var(--sa-text-tertiary);
-}
 
 .uploader-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
 }
+/* 方案 A：卡片就地向下展开 4×4 海报墙，不产生浮层、不遮挡邻居 */
 .uploader-card {
   cursor: pointer;
   border-radius: 16px;
   background: var(--sa-elevated);
   border: 1px solid var(--sa-border-subtle);
-  padding: 14px;
-  transition: transform 0.2s, border-color 0.2s;
+  padding: 16px 18px;
+  transition:
+    background-color 0.3s ease,
+    border-color 0.3s ease,
+    transform 0.3s var(--spring, cubic-bezier(0.16, 1, 0.3, 1)),
+    box-shadow 0.3s ease;
 }
-.uploader-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--sa-accent);
+.uploader-card:hover,
+.uploader-card:focus-visible {
+  background: var(--sa-hover);
+  border-color: var(--sa-accent-border);
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px -20px rgba(0, 0, 0, 0.85);
+  outline: none;
 }
-.uploader-cover {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--sa-subtle);
-}
-.uploader-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.uploader-placeholder {
-  width: 100%;
-  height: 100%;
+.up-head {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #1e2a3a, #2a1e3a);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
 }
-.uploader-initial {
-  font-size: 34px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.65);
+.up-id {
+  min-width: 0;
 }
-.uploader-icon {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-}
-.uploader-name {
-  margin-top: 12px;
+.up-name {
+  margin: 0;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--sa-text-primary);
-  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.uploader-meta {
-  margin-top: 6px;
+.up-sub {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+  margin-top: 4px;
   font-size: 12px;
+  color: var(--sa-text-tertiary);
 }
-.uploader-count {
-  color: var(--sa-text-secondary);
+.up-platform {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* 缺失检测徽标：频道全集与库内数量差（未启用检测的博主不显示） */
-.uploader-missing {
-  flex-shrink: 0;
+.up-missing {
+  flex: none;
   padding: 0 6px;
   border-radius: 999px;
   border: 1px solid var(--sa-accent);
   color: var(--sa-accent);
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 1.6;
 }
-.uploader-platform {
-  color: var(--sa-accent);
+.up-count {
+  flex: none;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.up-count b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sa-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.up-count span {
+  margin-left: 2px;
+  font-size: 10px;
+  color: var(--sa-text-tertiary);
+}
+
+/* 展开态：高度/透明度过渡，卡片自身变高把下方内容推开（不是浮层） */
+.poster-wall {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    max-height 0.4s var(--spring, cubic-bezier(0.16, 1, 0.3, 1)),
+    opacity 0.3s ease,
+    margin-top 0.3s ease;
+}
+.poster-wall--open {
+  max-height: 320px;
+  opacity: 1;
+  margin-top: 14px;
+}
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sa-border-subtle);
+}
+.poster-tile {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--sa-border-subtle);
+}
+.poster-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.2s ease;
+}
+.poster-tile:hover img {
+  transform: scale(1.08);
 }
 
 .list-loading {
@@ -320,8 +426,12 @@ onMounted(() => load(1))
     align-items: stretch;
     gap: 12px;
   }
-  .search-input {
-    width: 100%;
+  .uploader-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .uploader-card {
+    padding: 14px 16px;
   }
 }
 </style>

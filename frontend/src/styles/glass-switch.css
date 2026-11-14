@@ -1,0 +1,58 @@
+/* =========================================================================
+   流光空间开关（Spatial Switch）
+   复刻参考稿 gemini-code-1792316911894 的 .spatial-switch：
+     48×26 全圆角轨道 · 20px 纯白手柄（带投影）· 选中位移 22px
+     未选中：12% 白底 + 15% 白描边
+     选中  ：主题色实底 + 70% 高光描边 + 0 0 16px 辉光
+   放在全局样式里（main.ts 引入），避免 SFC scoped 与 @import 的作用域问题：
+   设置页主视图与各子面板（AI、待整理、YouTube 下载）共用同一份实现。
+   ========================================================================= */
+.sa-switch {
+  display: inline-flex;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.sa-switch input {
+  display: none;
+}
+.sa-switch .track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 2px;
+  width: 48px;
+  height: 26px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--sa-text-primary) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--sa-text-primary) 15%, transparent);
+  transition:
+    background-color 0.3s var(--spring, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 0.3s ease,
+    box-shadow 0.3s ease;
+  flex-shrink: 0;
+}
+.sa-switch .thumb {
+  position: relative;
+  top: auto;
+  left: auto;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  transition: transform 0.3s var(--spring, cubic-bezier(0.16, 1, 0.3, 1));
+}
+.sa-switch input:checked + .track {
+  background: var(--sa-accent);
+  border-color: color-mix(in oklab, var(--sa-accent) 70%, #fff);
+  box-shadow: 0 0 16px color-mix(in oklab, var(--sa-accent) 45%, transparent);
+}
+.sa-switch input:checked + .track .thumb {
+  transform: translateX(22px);
+}
+.sa-switch input:disabled + .track {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { photosApi } from '@/api/photos'
 import type {
@@ -438,6 +438,132 @@ const wallGroups = computed(() => {
     list.push(photo)
   }
   return groups
+})
+
+// ===== 照片墙 justified 等高行（Google Photos / Flickr 风格）=====
+// 同一行内高度一致，每张宽度按其自身宽高比分配；不同行高度可不同；
+// 最后一行不满时保持目标行高并左对齐（不拉伸填满）。
+// 照片宽高比只能前端从图片自身获取：@load 读 naturalWidth / naturalHeight。
+type WallCell = { photo: PhotoItem; width: number }
+type WallGroupLayout = { key: string; title: string; gap: number; rows: WallRow[] }
+type WallRow = { height: number; cells: WallCell[] }
+
+const DEFAULT_ASPECT_RATIO = 0.75 // 宽高比未知时的兜底（3:4 竖版）
+const WALL_ROW_HEIGHT = 240 // 桌面目标行高
+const WALL_ROW_HEIGHT_NARROW = 150 // 移动端（≤768px）目标行高
+const WALL_GAP = 8
+const WALL_GAP_NARROW = 3
+
+const aspectRatios = reactive(new Map<number, number>())
+const wallGridWidths = reactive(new Map<string, number>())
+const gridEls = new Map<string, HTMLElement>()
+const gridKeys = new WeakMap<Element, string>()
+let wallObserver: ResizeObserver | null = null
+
+function photoAspect(photo: PhotoItem): number {
+  return aspectRatios.get(photo.id) ?? DEFAULT_ASPECT_RATIO
+}
+
+// 比例写回的批量合并：一帧内多次 load 只在下一帧统一提交一次，避免整墙反复重算
+let aspectRaf = 0
+const pendingAspects = new Map<number, number>()
+function queueAspect(photoId: number, ratio: number) {
+  pendingAspects.set(photoId, ratio)
+  if (aspectRaf) return
+  aspectRaf = requestAnimationFrame(() => {
+    aspectRaf = 0
+    for (const [id, r] of pendingAspects) aspectRatios.set(id, r)
+    pendingAspects.clear()
+  })
+}
+
+function onThumbLoad(ev: Event, photo: PhotoItem) {
+  const el = ev.target as HTMLImageElement | null
+  if (!el) return
+  const w = el.naturalWidth
+  const h = el.naturalHeight
+  if (!w || !h) return
+  const ratio = w / h
+  if (aspectRatios.get(photo.id) === ratio) return
+  queueAspect(photo.id, ratio)
+}
+
+// 容器宽度监听：宽度变化（窗口缩放 / 布局变化）时重算
+function ensureWallObserver() {
+  if (wallObserver || typeof ResizeObserver === 'undefined') return
+  wallObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const key = gridKeys.get(entry.target)
+      if (!key) continue
+      const width = entry.contentRect.width
+      if (wallGridWidths.get(key) !== width) wallGridWidths.set(key, width)
+    }
+  })
+}
+
+function setWallGridRef(key: string, el: unknown) {
+  ensureWallObserver()
+  const node = el instanceof HTMLElement ? el : null
+  if (gridEls.get(key) === node) return
+  const prev = gridEls.get(key)
+  if (prev) {
+    wallObserver?.unobserve(prev)
+    gridKeys.delete(prev)
+  }
+  if (node) {
+    gridEls.set(key, node)
+    gridKeys.set(node, key)
+    wallObserver?.observe(node)
+    wallGridWidths.set(key, node.clientWidth)
+  } else {
+    gridEls.delete(key)
+  }
+}
+
+// 单组分行：容器内宽 W、间距 g、目标行高 H；逐张累加比例 r，行高 h=(W-g*(n-1))/Σr，
+// h ≤ H 时该行定型，每张宽度 = h * r；剩余不满一行按 H 高、H * r 宽并左对齐。
+function layoutWallRows(
+  photos: PhotoItem[],
+  width: number,
+  gap: number,
+  target: number,
+): WallRow[] {
+  const rows: WallRow[] = []
+  if (width <= 0) return rows
+  let current: PhotoItem[] = []
+  let sum = 0
+  for (const photo of photos) {
+    current.push(photo)
+    sum += photoAspect(photo)
+    const n = current.length
+    const h = (width - gap * (n - 1)) / sum
+    if (h <= target) {
+      rows.push({
+        height: h,
+        cells: current.map((p) => ({ photo: p, width: h * photoAspect(p) })),
+      })
+      current = []
+      sum = 0
+    }
+  }
+  if (current.length) {
+    rows.push({
+      height: target,
+      cells: current.map((p) => ({ photo: p, width: target * photoAspect(p) })),
+    })
+  }
+  return rows
+}
+
+const wallLayout = computed<WallGroupLayout[]>(() => {
+  const gap = isNarrow.value ? WALL_GAP_NARROW : WALL_GAP
+  const target = isNarrow.value ? WALL_ROW_HEIGHT_NARROW : WALL_ROW_HEIGHT
+  return wallGroups.value.map((group) => ({
+    key: group.key,
+    title: group.title,
+    gap,
+    rows: layoutWallRows(group.photos, wallGridWidths.get(group.key) ?? 0, gap, target),
+  }))
 })
 
 watch(viewMode, (v) =>
@@ -896,6 +1022,16 @@ function stepLightbox(delta: number) {
   editing.value = false
 }
 
+/**
+ * 灯箱收藏浮层：点浮层与触发按钮之外的地方收起。
+ * 之前只在「选中收藏夹 / 关闭灯箱」时才关，点画面不会收 —— 属于同类下拉缺陷。
+ */
+function onDocClickClosePicker(e: MouseEvent) {
+  if (!pickerOpen.value) return
+  const t = e.target as HTMLElement | null
+  if (t?.closest('.lightbox-picker') || t?.closest('.lightbox-collect')) return
+  pickerOpen.value = false
+}
 function onKey(e: KeyboardEvent) {
   if (!lightboxOpen.value) {
     // 灯箱未开时 Esc 关帖子大卡片；灯箱开着时 Esc 先关灯箱（大卡片留在下层，符合层级）
@@ -1028,6 +1164,7 @@ function onDateFilterChange(v: string | null) {
 
 onMounted(() => {
   window.addEventListener('keydown', onKey)
+  document.addEventListener('click', onDocClickClosePicker)
   syncNarrow()
   window.addEventListener('resize', syncNarrow)
   void refreshFilterOptions()
@@ -1035,8 +1172,12 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKey)
+  document.removeEventListener('click', onDocClickClosePicker)
   window.removeEventListener('resize', syncNarrow)
   if (searchTimer) clearTimeout(searchTimer)
+  wallObserver?.disconnect()
+  wallObserver = null
+  if (aspectRaf) cancelAnimationFrame(aspectRaf)
 })
 
 watch(
@@ -1221,33 +1362,42 @@ watch(filterParams, () => {
 
     <template v-else>
       <div v-if="viewMode !== 'post'" class="wall-timeline" :class="{ 'wall-timeline--flat': viewMode === 'wall' }">
-        <section v-for="group in wallGroups" :key="group.key" class="wall-day">
+        <section v-for="group in wallLayout" :key="group.key" class="wall-day">
           <h3 v-if="group.title" class="wall-day-title">{{ group.title }}</h3>
-          <div class="wall-grid">
-            <button
-              v-for="photo in group.photos"
-              :key="photo.id"
-              class="wall-cell"
-              type="button"
-              @click="openLightbox(photo, flatPhotos)"
+          <div class="wall-grid" :ref="(el) => setWallGridRef(group.key, el)">
+            <div
+              v-for="(row, rowIndex) in group.rows"
+              :key="rowIndex"
+              class="wall-row"
+              :style="{ gap: group.gap + 'px', marginBottom: group.gap + 'px' }"
             >
-              <img
-                class="wall-media"
-                :src="thumbUrl(photo)"
-                :alt="photo.file_name"
-                loading="lazy"
-                @error="onThumbError($event, photo)"
-              />
-              <span v-if="photo.media_kind === 'video'" class="media-play">
-                <PlayArrowOutlined :size="18" />
-              </span>
-              <span v-if="isSaved(photo.id)" class="saved-dot" aria-label="已收藏">
-                <BookmarkFilled :size="12" />
-              </span>
-              <span v-if="photo.analyzed_at" class="ai-dot" aria-label="已分析">
-                <RobotOutlined :size="11" />
-              </span>
-            </button>
+              <button
+                v-for="cell in row.cells"
+                :key="cell.photo.id"
+                class="wall-cell"
+                type="button"
+                :style="{ width: cell.width + 'px', height: row.height + 'px' }"
+                @click="openLightbox(cell.photo, flatPhotos)"
+              >
+                <img
+                  class="wall-media"
+                  :src="thumbUrl(cell.photo)"
+                  :alt="cell.photo.file_name"
+                  loading="lazy"
+                  @load="onThumbLoad($event, cell.photo)"
+                  @error="onThumbError($event, cell.photo)"
+                />
+                <span v-if="cell.photo.media_kind === 'video'" class="media-play">
+                  <PlayArrowOutlined :size="18" />
+                </span>
+                <span v-if="isSaved(cell.photo.id)" class="saved-dot" aria-label="已收藏">
+                  <BookmarkFilled :size="12" />
+                </span>
+                <span v-if="cell.photo.analyzed_at" class="ai-dot" aria-label="已分析">
+                  <RobotOutlined :size="11" />
+                </span>
+              </button>
+            </div>
           </div>
         </section>
       </div>
@@ -1798,28 +1948,32 @@ html[data-theme='dark'] .photo-search-input {
   margin: 0;
 }
 
+/* 照片墙 = justified 等高行：每张宽/高由 JS 依图片宽高比内联计算 */
 .wall-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  display: block;
+}
+.wall-row {
+  display: flex;
+  align-items: stretch;
 }
 .wall-cell,
 .post-cell {
   position: relative;
   display: block;
-  width: 100%;
   padding: 0;
   border: 0;
   background: var(--sa-subtle, #111);
   overflow: hidden;
-  aspect-ratio: 1;
   border-radius: 8px;
 }
 .wall-cell {
+  flex: none;
   cursor: pointer;
 }
-/* 帖子缩略图同样是热区（点它开灯箱）→ 与 .wall-cell 一样给手型光标 */
+/* 帖子缩略图保持正方形；照片墙走内联尺寸，不受此规则影响 */
 .post-cell {
+  width: 100%;
+  aspect-ratio: 1;
   cursor: pointer;
 }
 .wall-media,
@@ -2538,10 +2692,7 @@ html[data-theme='dark'] .post-detail-panel {
     flex: none;
     order: 2;
   }
-  .wall-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 3px;
-  }
+  /* 照片墙行高/间距由 JS 依 isNarrow 内联计算，无需固定列数 */
   .wall-cell,
   .post-cell {
     border-radius: 4px;

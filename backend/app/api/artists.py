@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import func, select
 
 from app.api.guards import ensure_name_ci_unique
+from app.core.audit import mark_before, mark_changes
 from app.core.deps import DbDep, PaginationDep
 from app.models.artist import Artist
 from app.models.music_video import MusicVideo, music_video_artists
@@ -22,7 +23,7 @@ from app.schemas import (
     PageResponse,
 )
 from app.services import audiodb_service, entity_image_service, external_providers, img_variant, portrait_service
-from app.services.derived_http import serve_derived_image
+from app.services.derived_http import serve_derived_image, versioned_cache_control
 from app.services.completion import artist_completion_pct
 from app.services.name_match import fuzzy_artists, match_artist_exact
 from app.services.soft_delete_service import soft_delete_artist
@@ -35,7 +36,7 @@ def list_artists(
     db: DbDep,
     pagination: PaginationDep,
     q: Optional[str] = Query(None, description="按名称搜索"),
-    sort: Optional[str] = Query(None, description="排序：completion=完成度升序，-completion=降序"),
+    sort: Optional[str] = Query(None, description="排序：completion=完成度升序，-completion=降序，-videos=视频数降序"),
     only_with_videos: bool = Query(False, description="仅显示有关联视频（未软删除）的艺人"),
     filter: str = Query(
         "all",
@@ -46,6 +47,25 @@ def list_artists(
     completion = artist_completion_pct()
     stmt = select(Artist, completion.label("completion_pct")).where(
         Artist.active_filter()
+    )
+    # 视频数（排除软删）：既用于 -videos 排序，也用于首页「视频最多的 20 位艺人」
+    video_count = (
+        select(
+            music_video_artists.c.artist_id.label("aid"),
+            func.count(MusicVideo.id).label("cnt"),
+        )
+        .join(MusicVideo, MusicVideo.id == music_video_artists.c.music_video_id)
+        .where(
+            MusicVideo.deleted_at.is_(None),
+            music_video_artists.c.artist_id.is_not(None),
+        )
+        .group_by(music_video_artists.c.artist_id)
+        .subquery()
+    )
+    video_count_col = (
+        select(func.coalesce(video_count.c.cnt, 0))
+        .where(video_count.c.aid == Artist.id)
+        .scalar_subquery()
     )
     # 有关联视频（m2m，排除软删视频；组合成员身份不算「关联」）：视频侧一次预聚合
     # IN，替代逐行相关 COUNT（v3.2.54 根治，与歌曲列表同款）
@@ -86,6 +106,17 @@ def list_artists(
         stmt = stmt.order_by(completion.asc())
     elif sort == "-completion":
         stmt = stmt.order_by(completion.desc())
+    elif sort == "-videos":
+        # 视频数降序：同数量按名称稳定排序，避免每次请求顺序抖动
+        stmt = stmt.order_by(
+            video_count_col.desc(),
+            Artist.sort_name.asc().nulls_last(),
+        )
+    elif sort == "videos":
+        stmt = stmt.order_by(
+            video_count_col.asc(),
+            Artist.sort_name.asc().nulls_last(),
+        )
     else:
         stmt = stmt.order_by(Artist.sort_name.asc().nulls_last())
     rows = db.execute(
@@ -195,17 +226,19 @@ def get_artist(artist_id: int, db: DbDep):
 
 
 @router.patch("/{artist_id}", response_model=ArtistRead)
-def update_artist(artist_id: int, payload: ArtistUpdate, db: DbDep):
+def update_artist(artist_id: int, payload: ArtistUpdate, request: Request, db: DbDep):
     artist = Artist.get_active(db, artist_id)
     if not artist:
         raise HTTPException(404, "Artist 不存在")
     data = payload.model_dump(exclude_unset=True)
     if "name" in data:
         ensure_name_ci_unique(db, Artist, data["name"], "艺人", exclude_id=artist.id)
+    before = mark_before(artist, data.keys())
     for k, v in data.items():
         setattr(artist, k, v)
     db.commit()
     db.refresh(artist)
+    mark_changes(request, before, data)
     return artist
 
 
@@ -239,8 +272,12 @@ def get_artist_avatar(artist_id: int, db: DbDep, request: Request, w: Optional[i
     if w:
         p2 = img_variant.resized_variant(p, w)
         if p2 is not None:
-            return serve_derived_image(request, p2, "image/jpeg")
-    return serve_derived_image(request, p, audiodb_service.media_type_of(p))
+            return serve_derived_image(
+                request, p2, "image/jpeg", cache_control=versioned_cache_control(request)
+            )
+    return serve_derived_image(
+        request, p, audiodb_service.media_type_of(p), cache_control=versioned_cache_control(request)
+    )
 
 
 @router.get("/{artist_id}/banner")
@@ -255,8 +292,12 @@ def get_artist_banner(artist_id: int, db: DbDep, request: Request, w: Optional[i
     if w:
         p2 = img_variant.resized_variant(p, w)
         if p2 is not None:
-            return serve_derived_image(request, p2, "image/jpeg")
-    return serve_derived_image(request, p, audiodb_service.media_type_of(p))
+            return serve_derived_image(
+                request, p2, "image/jpeg", cache_control=versioned_cache_control(request)
+            )
+    return serve_derived_image(
+        request, p, audiodb_service.media_type_of(p), cache_control=versioned_cache_control(request)
+    )
 
 
 @router.delete("/{artist_id}/banner")

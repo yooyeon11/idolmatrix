@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse, Response
 from app.core.database import SessionLocal
 from app.core.deps import is_public, is_token_route, skip_session_touch
 from app.core.security import COOKIE_NAME, csrf_origin_allowed
+from app.core import playback_sign
 from app.services.auth_service import auth_is_off, load_session
 
 logger = logging.getLogger("app.auth")
@@ -26,6 +27,10 @@ class AuthGateMiddleware(BaseHTTPMiddleware):
         if path != "/api" and not path.startswith("/api/"):
             return await call_next(request)
         if is_public(request.method, path):
+            return await call_next(request)
+        # 签名播放 URL：原生播放器（VLC / ExoPlayer / AVPlayer）带不了 Cookie，
+        # 用短时效 ?exp=&sig= 放行 /stream、/manifest.m3u8、/segments/*。
+        if playback_sign.verify_request(path, request.query_params):
             return await call_next(request)
         # 外部集成 Token 请求：免疫 CSRF（自定义头跨域不可伪造），会话校验交给依赖层
         if request.headers.get("x-api-token") and is_token_route(path):

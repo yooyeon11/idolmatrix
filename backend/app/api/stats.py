@@ -11,7 +11,7 @@ from app.schemas.dashboard import (
     WatchPingRequest,
     WatchPingResult,
 )
-from app.services.stats_service import DEFAULT_LIMIT, MAX_LIMIT, library_stats, recap
+from app.services.stats_service import DEFAULT_LIMIT, MAX_LIMIT, heat_stats, library_stats, recap
 from app.services.stats_service import artist_trend
 from app.services.watch_service import record_watch
 
@@ -25,9 +25,9 @@ def get_library_stats(
     include_shorts: bool = Query(False, description="是否把短视频计入排行"),
     limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
 ):
-    return library_stats(
-        db, range_key=range, include_shorts=include_shorts, limit=limit
-    )
+    data = library_stats(db, range_key=range, include_shorts=include_shorts, limit=limit)
+    data["heat"] = heat_stats(db, range_key=range, limit=limit)
+    return data
 
 
 @router.get("/artist-trend")

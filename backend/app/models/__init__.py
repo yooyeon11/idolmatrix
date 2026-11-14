@@ -23,10 +23,20 @@ from app.models.app_setting import AppSetting
 from app.models.user import User
 from app.models.auth_session import AuthSession
 from app.models.incoming_file import IncomingFile
+from app.models.ingest import IngestManifest, IngestRequest
+from app.models.agent_session import AgentMessage, AgentThread
 from app.models.entity_image import EntityImage
 from app.models.entity_field_lock import EntityFieldLock
 from app.models.external_channel_video import ExternalChannelVideo
 from app.models.video_score import VideoScore
+from app.models.video_publish import VideoPublish
+from app.models.download import (
+    DownloadJob,
+    DownloadSubscription,
+    DownloadSubscriptionItem,
+)
+from app.models.api_token import ApiToken
+from app.models.audit_log import AuditLog
 
 __all__ = [
     # Artist / Group / Membership
@@ -64,6 +74,10 @@ __all__ = [
     "AuthSession",
     # Incoming（待整理扫描落库）
     "IncomingFile",
+    "IngestManifest",
+    "AgentThread",
+    "AgentMessage",
+    "IngestRequest",
     # EntityImages（头像/横幅候选历史）
     "EntityImage",
     # EntityFieldLocks（AI/站点获取字段锁）
@@ -72,4 +86,13 @@ __all__ = [
     "ExternalChannelVideo",
     # VideoScore（AI 视频评分，实验功能）
     "VideoScore",
+    # VideoPublish（外部平台分发：B 站 BV 号）
+    "VideoPublish",
+    # Downloads（YouTube 下载 + 收藏夹订阅）
+    "DownloadJob",
+    "DownloadSubscription",
+    "DownloadSubscriptionItem",
+    # ApiToken / AuditLog（外部集成门禁与操作审计）
+    "ApiToken",
+    "AuditLog",
 ]

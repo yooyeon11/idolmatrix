@@ -651,3 +651,156 @@ def recap(db: Session) -> dict[str, Any]:
         "records": {"first": first, "longest": longest, "largest": largest},
         "monthly": monthly,
     }
+
+
+# ===== 双轴热度（给自己看：内容力 × 观看热度） =====
+def _heat_rows(db: Session, *, range_key: str) -> list[dict[str, Any]]:
+    """按艺人 / 组合聚合：库存 + 观看 + 收藏，输出双轴分数（0–100）。"""
+    from app.models.video_collection import VideoCollectionItem
+
+    now = datetime.utcnow()
+    win_days = {"30d": 30, "90d": 90}.get(range_key)
+    cutoff = now - timedelta(days=win_days) if win_days else None
+
+    # 视频 → 实体
+    vid_artists: dict[int, set[int]] = {}
+    for vid, aid in db.execute(
+        select(music_video_artists.c.music_video_id, music_video_artists.c.artist_id)
+    ):
+        vid_artists.setdefault(int(vid), set()).add(int(aid))
+    vid_groups: dict[int, set[int]] = {}
+    for vid, gid in db.execute(
+        select(music_video_groups.c.music_video_id, music_video_groups.c.group_id)
+    ):
+        vid_groups.setdefault(int(vid), set()).add(int(gid))
+
+    # 观看行为（带 30 天半衰）。**只数有效播放**：与观看榜同一口径，
+    # 否则开始播放第一帧就建的那条 0 秒行会被算成一次播放（见 watch_service）。
+    from app.services.watch_service import qualified_play_clause
+
+    plays: dict[str, int] = {}
+    seconds: dict[str, float] = {}
+    completed: dict[str, int] = {}
+
+    def _add(kind: str, eid: int, key: str, *, sec: float, done: bool, decay: float) -> None:
+        plays[key] = plays.get(key, 0) + 1
+        seconds[key] = seconds.get(key, 0.0) + sec * decay
+        if done:
+            completed[key] = completed.get(key, 0) + 1
+
+    q = select(
+        WatchPlay.music_video_id,
+        WatchPlay.seconds_watched,
+        WatchPlay.completed,
+        WatchPlay.last_seen_at,
+    ).where(qualified_play_clause())
+    if cutoff is not None:
+        q = q.where(WatchPlay.last_seen_at >= cutoff)
+    for vid, sec, done, seen in db.execute(q):
+        if vid is None:
+            continue
+        days = max((now - seen).total_seconds() / 86400.0, 0.0) if seen else 0.0
+        decay = 0.5 ** (days / 30.0)
+        for aid in vid_artists.get(int(vid), ()):
+            _add("artist", aid, f"artist:{aid}", sec=float(sec or 0), done=bool(done), decay=decay)
+        for gid in vid_groups.get(int(vid), ()):
+            _add("group", gid, f"group:{gid}", sec=float(sec or 0), done=bool(done), decay=decay)
+
+    # 收藏
+    favs: dict[str, int] = {}
+    fav_rows = db.execute(
+        select(VideoCollectionItem.music_video_id, func.count())
+        .group_by(VideoCollectionItem.music_video_id)
+    )
+    for vid, n in fav_rows:
+        for aid in vid_artists.get(int(vid), ()):
+            favs[f"artist:{aid}"] = favs.get(f"artist:{aid}", 0) + int(n)
+        for gid in vid_groups.get(int(vid), ()):
+            favs[f"group:{gid}"] = favs.get(f"group:{gid}", 0) + int(n)
+
+    # 库存
+    lib: dict[str, dict[str, Any]] = {}
+    for mv in db.scalars(
+        select(MusicVideo).where(MusicVideo.deleted_at.is_(None), MusicVideo.ingestion_status == "library")
+    ):
+        for aid in vid_artists.get(mv.id, ()):
+            row = lib.setdefault(f"artist:{aid}", {"kind": "artist", "id": aid, "videos": 0, "dur": 0})
+            row["videos"] += 1
+            row["dur"] += int(mv.duration or 0)
+        for gid in vid_groups.get(mv.id, ()):
+            row = lib.setdefault(f"group:{gid}", {"kind": "group", "id": gid, "videos": 0, "dur": 0})
+            row["videos"] += 1
+            row["dur"] += int(mv.duration or 0)
+
+    # 归一化（对数压缩，避免大户碾压）
+    def _norm(vals: dict[str, float]) -> dict[str, float]:
+        if not vals:
+            return {}
+        top = max(vals.values()) or 1.0
+        return {k: (v / top) for k, v in vals.items()}
+
+    n_plays = _norm({k: float(v) for k, v in plays.items()})
+    n_seconds = _norm(seconds)
+    n_favs = _norm({k: float(v) for k, v in favs.items()})
+    n_videos = _norm({k: float(v["videos"]) for k, v in lib.items()})
+    n_dur = _norm({k: float(v["dur"]) for k, v in lib.items()})
+
+    out: list[dict[str, Any]] = []
+    for key, row in lib.items():
+        comp = completed.get(key, 0)
+        p = plays.get(key, 0)
+        completion = (comp / p) if p else 0.0
+        engagement = 100.0 * (
+            0.35 * n_seconds.get(key, 0.0)
+            + 0.25 * n_plays.get(key, 0.0)
+            + 0.20 * completion
+            + 0.20 * n_favs.get(key, 0.0)
+        )
+        content = 100.0 * (0.65 * n_videos.get(key, 0.0) + 0.35 * n_dur.get(key, 0.0))
+        out.append(
+            {
+                "kind": row["kind"],
+                "id": row["id"],
+                "video_count": row["videos"],
+                "duration_seconds": row["dur"],
+                "plays": p,
+                "seconds_watched": int(seconds.get(key, 0.0)),
+                "completion_rate": round(completion, 3),
+                "favorites": favs.get(key, 0),
+                "content_score": round(content, 1),
+                "engagement_score": round(engagement, 1),
+            }
+        )
+
+    # 象限：以中位数为界；新入库（30 天内且视频数少）单独标
+    if out:
+        med_c = sorted(x["content_score"] for x in out)[len(out) // 2]
+        med_e = sorted(x["engagement_score"] for x in out)[len(out) // 2]
+        for x in out:
+            hi_c = x["content_score"] >= med_c
+            hi_e = x["engagement_score"] >= med_e
+            x["quadrant"] = (
+                "both" if hi_c and hi_e else "content" if hi_c else "engagement" if hi_e else "new"
+            )
+    return out
+
+
+def heat_stats(db: Session, *, range_key: str = "all", limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    rows = _heat_rows(db, range_key=range_key)
+    # 补名称与头像
+    names: dict[str, Any] = {}
+    for a in db.scalars(select(Artist)):
+        names[f"artist:{a.id}"] = (a.name, a.chinese_name, a.avatar_path, a.uid)
+    for g in db.scalars(select(Group)):
+        names[f"group:{g.id}"] = (g.name, g.chinese_name, g.avatar_path, g.uid)
+    for x in rows:
+        meta = names.get(f"{x['kind']}:{x['id']}")
+        if not meta:
+            continue
+        x["name"] = meta[0] or meta[1] or f"#{x['id']}"
+        x["chinese_name"] = meta[1]
+        x["avatar_path"] = meta[2]
+        x["uid"] = meta[3]
+    rows = [x for x in rows if x.get("uid")]
+    rows.sort(key=lambda x: (x["engagement_score"] + x["content_score"]), reverse=True)
+    return rows[: max(1, min(limit * 2, MAX_LIMIT * 2))]

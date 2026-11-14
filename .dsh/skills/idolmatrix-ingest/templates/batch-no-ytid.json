@@ -1,0 +1,59 @@
+{
+ "_说明": "无 ytid 的批次（电视录像 .ts/.avi，无 .info.json）。文件名有规律用 pattern+specials；无规律用 specials_by_fn 逐条定义。",
+ "batch": "20261018-示例-无ytid",
+ "title": "示例批次：XX 2009 电视录像",
+ "kind": "no-ytid",
+ "owner": "",
+ "note": "素材为电视录像（无 ytid / 无 .info.json）→ 服务端登记为 issues，走绕过 scan 的手工批流程：file_path=/data/incoming/<fn>，source_* 一律 null，original_title 落文件名，published_date 取文件名 [YYMMDD]。",
+ "entities": {"groups": [], "songs": []},
+ "no_ytid": {
+  "pattern": "^\\[(\\d{6})\\]\\s*(.+?)\\.(ts|mp4|mkv|avi)$",
+  "default_group_ids": [56],
+  "default_subject": "KARA",
+  "default_video_types": ["PerformanceVideo"],
+  "song_map": {
+   "Honey": {"sid": 2960, "disp": "Honey"}
+  },
+  "prog_map": {
+   "KBS Music Bank": "Music Bank",
+   "SBS Inkigayo": "SBS Inkigayo"
+  },
+  "tail_keep": {
+   "SBS Inkigayo Idol Special": "SBS Inkigayo Idol Special"
+  },
+  "specials": {
+   "090816|KARA - Again & Again (SBS Inkigayo Idol Special)": {
+    "subj": "KARA",
+    "songs": ["Again & Again"],
+    "ev": "SBS Inkigayo",
+    "tail": "SBS Inkigayo Idol Special",
+    "vt": ["PerformanceVideo", "CoverStage"],
+    "g": [56],
+    "a": [],
+    "participants": [],
+    "ident": "KARA组合",
+    "cover_orig": "2PM",
+    "ch": "KARA组合于 2009 年 8 月 16 日在 SBS Inkigayo 翻唱歌曲 Again & Again（原唱 2PM）。",
+    "note": "KARA 翻唱 2PM → 落 翻唱/，类型追加 CoverStage"
+   }
+  },
+  "specials_by_fn": {
+   "Mighty Mouth - Love Class (feat. Nicole) (KBS Music Bank 2009.08.28).ts": {
+    "subj": "Mighty Mouth",
+    "songs": ["Love Class"],
+    "ev": "Music Bank",
+    "tail": "Music Bank",
+    "vt": ["PerformanceVideo"],
+    "g": [87],
+    "a": [],
+    "participants": [210],
+    "perf": "2009-08-28",
+    "ident": "Mighty Mouth组合",
+    "note": "文件名无 [YYMMDD] 前缀 → 用 specials_by_fn 显式给 perf"
+   }
+  },
+  "files": [
+   {"file_name": "[090213] KARA - Honey (KBS Music Bank).ts", "duration": 213, "width": 1920, "height": 1080}
+  ]
+ }
+}

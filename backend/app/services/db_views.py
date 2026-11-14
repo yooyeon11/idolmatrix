@@ -186,7 +186,7 @@ def build_group_rows(db: Session, report: Optional[dict] = None) -> dict:
                 "description": a.description,
                 "tagline": a.tagline,
                 "social_media": a.social_media,
-                "hide_from_home": bool(getattr(a, "hide_from_home", False)),
+                "featured_in_home": bool(getattr(a, "featured_in_home", False)),
                 "external_links": a.external_links or [],
             }
         )
@@ -484,7 +484,7 @@ def build_artist_workspace(db: Session, uid: str) -> Optional[dict]:
             "avatar_path": a.avatar_path,
             "banner_path": a.banner_path,
             "social_media": a.social_media,
-            "hide_from_home": bool(getattr(a, "hide_from_home", False)),
+            "featured_in_home": bool(getattr(a, "featured_in_home", False)),
             "external_links": a.external_links or [],
         },
         "memberships": memberships,
@@ -599,7 +599,7 @@ def build_group_workspace(db: Session, uid: str) -> Optional[dict]:
             "avatar_path": g.avatar_path,
             "banner_path": g.banner_path,
             "social_media": g.social_media,
-            "hide_from_home": bool(getattr(g, "hide_from_home", False)),
+            "featured_in_home": bool(getattr(g, "featured_in_home", False)),
             "external_links": g.external_links or [],
         },
         "row": row,
@@ -754,6 +754,73 @@ def build_artist_rows(db: Session, report: Optional[dict] = None) -> dict:
         "items": items,
         "total": len(items),
         "checklist": ["出生日期", "职业", "描述/简介", "头像", "作品关联"],
+    }
+
+
+def build_showcase_rows(db: Session) -> dict:
+    """首页轮动「艺人展示」列表：组合 + 艺人各一行。
+
+    每行给出是否有竖版海报（avatar_path）/ 横幅海报（banner_path），
+    以及是否已加入首页轮动（featured_in_home，opt-in）。
+    勾选写入复用现有 PATCH /artists/{id}、/groups/{id}。
+    """
+    artists = db.scalars(select(Artist).where(Artist.deleted_at.is_(None))).all()
+    groups = db.scalars(select(Group).where(Group.deleted_at.is_(None))).all()
+
+    artist_videos = dict(
+        db.execute(
+            select(
+                music_video_artists.c.artist_id,
+                func.count(func.distinct(MusicVideo.id)),
+            )
+            .join(MusicVideo, MusicVideo.id == music_video_artists.c.music_video_id)
+            .where(
+                MusicVideo.deleted_at.is_(None),
+                MusicVideo.ingestion_status == "library",
+            )
+            .group_by(music_video_artists.c.artist_id)
+        ).all()
+    )
+    group_videos = dict(
+        db.execute(
+            select(
+                music_video_groups.c.group_id,
+                func.count(func.distinct(MusicVideo.id)),
+            )
+            .join(MusicVideo, MusicVideo.id == music_video_groups.c.music_video_id)
+            .where(
+                MusicVideo.deleted_at.is_(None),
+                MusicVideo.ingestion_status == "library",
+            )
+            .group_by(music_video_groups.c.group_id)
+        ).all()
+    )
+
+    items: List[dict] = []
+    for kind, rows, counts in (
+        ("group", groups, group_videos),
+        ("artist", artists, artist_videos),
+    ):
+        for obj in rows:
+            items.append(
+                {
+                    "type": kind,
+                    "id": obj.id,
+                    "uid": obj.uid,
+                    "name": obj.name,
+                    "chinese_name": obj.chinese_name,
+                    "avatar_path": obj.avatar_path,
+                    "banner_path": obj.banner_path,
+                    "has_poster": bool(obj.avatar_path),
+                    "has_banner": bool(obj.banner_path),
+                    "featured_in_home": bool(obj.featured_in_home),
+                    "video_count": int(counts.get(obj.id, 0)),
+                }
+            )
+    items.sort(key=lambda r: (r["type"] != "group", (r["name"] or "").casefold()))
+    return {
+        "items": items,
+        "featured_count": sum(1 for r in items if r["featured_in_home"]),
     }
 
 
@@ -1271,7 +1338,7 @@ def _suggest_description(db: Session, name: str) -> Optional[dict]:
         if not bio:
             continue
         bio = " ".join(bio.split())[:600]
-        from app.services.ai_service import translate_to_simplified
+        from app.services.llm_core import translate_to_simplified
 
         translated = translate_to_simplified(bio)
         if translated:

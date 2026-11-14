@@ -29,6 +29,12 @@ export const libraryApi = {
       })
       .then((r) => r.data)
   },
+  scanReset() {
+    return http
+      .post<{ cleared_files: number; cleared_manifests: number }>('/library/scan/reset')
+      .then((r) => r.data)
+  },
+
   scanSync() {
     return http.post<ScanSyncStats>('/library/scan/sync').then((r) => r.data)
   },

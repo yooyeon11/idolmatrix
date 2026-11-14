@@ -14,14 +14,14 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.core.config import settings
 from app.core.deps import DbDep, OwnerDep, PaginationDep
 from app.models.external_channel_video import ExternalChannelVideo
 from app.models.music_video import MusicVideo
 from app.schemas import PageResponse
-from app.services import app_settings, youtube_service
+from app.services import app_settings, uploader_channel_service, youtube_service
 from app.services.audiodb_service import ProviderError
 
 router = APIRouter(prefix="/uploaders", tags=["uploaders"])
@@ -37,12 +37,15 @@ class UploaderRead(BaseModel):
     platform: Optional[str] = None
     video_count: int = 0
     latest_video_id: Optional[int] = None
+    # 最近入库的若干条视频 id（列表页 4×4 海报墙用，最多 16 条；无视频时为空）
+    recent_video_ids: List[int] = []
     # 该博主已固定的视频类型（空 = 跟随 AI）
     video_types: List[str] = []
     # 是否在库内存在视频（false = 仅手工添加的规则，库里还没有他的作品）
     in_library: bool = True
     # ===== YouTube 缺失检测配置（来自博主规则）=====
     youtube_channel_url: str = ""
+    youtube_channel_id: str = ""
     missing_check_enabled: bool = False
     # ===== 缺失检测统计（快照汇总；未检测过为 None）=====
     channel_video_total: Optional[int] = None
@@ -59,6 +62,7 @@ class UploaderRuleRead(BaseModel):
     name: str
     video_types: List[str] = []
     youtube_channel_url: str = ""
+    youtube_channel_id: str = ""
     missing_check_enabled: bool = False
 
 
@@ -87,6 +91,7 @@ class MissingReport(BaseModel):
     has_youtube_videos: bool = False
     # 规则配置回显（前端据此决定是否显示检测入口）
     channel_configured: bool = False
+    channel_id: str = ""
     missing_check_enabled: bool = False
     # 命中的规则名与原博主名「肉眼同名但写法不同」时回填（如 `MBCKpop` 命中
     # `MBC Kpop` 的配置），前端据此标注，避免用户以为配置没生效
@@ -115,24 +120,35 @@ class ChannelProbeResult(BaseModel):
     uploads_playlist: str = ""
 
 
+class BackfillChannelRequest(BaseModel):
+    dry_run: bool = False
+    include_rules: bool = False
+
+
 def _aggregate(db: DbDep) -> list[dict]:
     """按 original_uploader + 平台聚合库内博主（不软删、名字非空）。"""
     rows = db.execute(
         select(
             MusicVideo.original_uploader.label("name"),
             MusicVideo.source_platform.label("platform"),
+            MusicVideo.source_channel_id.label("source_channel_id"),
             func.count().label("video_count"),
             func.max(MusicVideo.id).label("latest_video_id"),
         )
         .where(MusicVideo.deleted_at.is_(None))
         .where(MusicVideo.original_uploader.is_not(None))
         .where(MusicVideo.original_uploader != "")
-        .group_by(MusicVideo.original_uploader, MusicVideo.source_platform)
+        .group_by(
+            MusicVideo.original_uploader,
+            MusicVideo.source_platform,
+            MusicVideo.source_channel_id,
+        )
     ).all()
     return [
         {
             "name": r.name,
             "platform": r.platform,
+            "source_channel_id": r.source_channel_id,
             "video_count": r.video_count,
             "latest_video_id": r.latest_video_id,
         }
@@ -141,48 +157,76 @@ def _aggregate(db: DbDep) -> list[dict]:
 
 
 def _snapshot_stats(db: DbDep, rule_map: dict[str, dict]) -> dict[str, dict]:
-    """{博主名键(uploader_key): {total, missing}}：缺失按「快照 − 库内 YouTube 视频」实时比对。
+    """{博主键 或 channel_id: {total, missing}}：频道身份优先，名字键兜底。
 
-    一次聚合查询拿快照全集，再与库内 (uploader, source_id) 集合在 Python 侧做差，
-    避免逐博主两次往返。仅统计已配置频道地址的博主（未配置不展示快照统计）。
+    同一 YouTube 频道改名后会有多个 uploader_key，但 channel_id 相同：
+    - 快照行按 channel_id 归组（sync 时已写入 channel_id）；
+    - 库内视频按 source_channel_id 归组（backfill 后覆盖新旧名字）；
+    - 没有 channel_id 的老数据退回 uploader_key 名字键。
     """
-    configured = {k for k, r in rule_map.items() if r.get("youtube_channel_url")}
+    key_to_cid = {
+        key: str(rule.get("youtube_channel_id") or "").strip()
+        for key, rule in rule_map.items()
+        if rule.get("youtube_channel_id")
+    }
+    configured_keys = {
+        key for key, rule in rule_map.items()
+        if rule.get("youtube_channel_url") or rule.get("youtube_channel_id")
+    }
+    configured_cids = {key_to_cid[k] for k in configured_keys if k in key_to_cid}
+
     snap_rows = db.execute(
         select(
             ExternalChannelVideo.uploader_key,
+            ExternalChannelVideo.channel_id,
             ExternalChannelVideo.video_id,
         )
     ).all()
     lib_rows = db.execute(
         select(
             MusicVideo.original_uploader,
+            MusicVideo.source_channel_id,
             MusicVideo.source_id,
         )
         .where(MusicVideo.deleted_at.is_(None))
         .where(func.lower(MusicVideo.source_platform) == "youtube")
         .where(MusicVideo.source_id.is_not(None))
     ).all()
-    # 快照键与库内博主名统一按 uploader_key 归一化：同名不同写法（空格 / 全角 /
-    # 零宽字符）的重复记录合到同一份统计，否则完成度永远算不出来
-    lib_ids: dict[str, set[str]] = {}
-    for name, sid in lib_rows:
-        lib_ids.setdefault(app_settings.uploader_key(name), set()).add(sid)
+    lib_ids_by_key: dict[str, set[str]] = {}
+    lib_ids_by_cid: dict[str, set[str]] = {}
+    for name, cid, sid in lib_rows:
+        lib_ids_by_key.setdefault(app_settings.uploader_key(name), set()).add(sid)
+        if cid:
+            lib_ids_by_cid.setdefault(str(cid), set()).add(sid)
+
     stats: dict[str, dict] = {}
     seen: set[tuple[str, str]] = set()
-    for key, vid in snap_rows:
-        norm = app_settings.uploader_key(key)
-        if norm not in configured:
+    for raw_key, raw_cid, vid in snap_rows:
+        norm = app_settings.uploader_key(raw_key)
+        cid = str(raw_cid or "").strip() or key_to_cid.get(norm, "")
+        if cid:
+            if cid not in configured_cids and norm not in configured_keys:
+                continue
+            identity = f"cid:{cid}"
+        else:
+            if norm not in configured_keys:
+                continue
+            identity = norm
+        if (identity, vid) in seen:
             continue
-        # 历史键与新键并存时同一视频会重复出现，按 (归一化博主, video_id) 去重
-        if (norm, vid) in seen:
-            continue
-        seen.add((norm, vid))
-        s = stats.setdefault(norm, {"total": 0, "missing": 0})
+        seen.add((identity, vid))
+        s = stats.setdefault(identity, {"total": 0, "missing": 0})
         s["total"] += 1
-        if vid not in lib_ids.get(norm, set()):
+        lib_ids = set(lib_ids_by_key.get(norm, set()))
+        if cid:
+            lib_ids |= lib_ids_by_cid.get(cid, set())
+        if vid not in lib_ids:
             s["missing"] += 1
+    # 名字键的查询入口：同一 channel_id 下多个名字共享同一份统计
+    for key, cid in key_to_cid.items():
+        if cid and f"cid:{cid}" in stats:
+            stats[key] = stats[f"cid:{cid}"]
     return stats
-
 
 def _rule_map(db: DbDep) -> dict[str, dict]:
     """{博主名键(uploader_key): 规则（类型 + 频道配置）}。"""
@@ -190,6 +234,7 @@ def _rule_map(db: DbDep) -> dict[str, dict]:
         app_settings.uploader_key(r["name"]): {
             "video_types": list(r["video_types"]),
             "youtube_channel_url": r.get("youtube_channel_url", ""),
+            "youtube_channel_id": r.get("youtube_channel_id", ""),
             "missing_check_enabled": bool(r.get("missing_check_enabled")),
         }
         for r in app_settings.read_uploader_rules(db)
@@ -203,55 +248,176 @@ def _stats_fields(stats: dict, key: str) -> dict:
     return {"channel_video_total": s["total"], "missing_count": s["missing"]}
 
 
+def _group_aggregate(
+    db: DbDep, rules: list[dict], rule_map: dict[str, dict]
+) -> list[dict]:
+    """把 _aggregate 的行按 channel_id（无则名字）合并成「一个频道一行」。
+
+    返回 dict：name / platform / source_channel_id / video_count / latest_video_id /
+    names / rule / stat_key。同一频道改名前后共用一行，规则优先取 channel_id 命中的那条。
+    """
+    aggregate = _aggregate(db)
+    name_to_cid: dict[str, str] = {}
+    for row in aggregate:
+        cid = str(row.get("source_channel_id") or "").strip()
+        if cid:
+            name_to_cid[app_settings.uploader_key(str(row["name"]))] = cid
+
+    groups: dict[str, dict] = {}
+    for row in aggregate:
+        name = str(row["name"])
+        cid = str(row.get("source_channel_id") or "").strip() or name_to_cid.get(
+            app_settings.uploader_key(name), ""
+        )
+        gkey = f"cid:{cid}" if cid else f"name:{name.casefold()}"
+        grp = groups.get(gkey)
+        if grp is None:
+            groups[gkey] = {
+                "name": name,
+                "platform": row["platform"],
+                "source_channel_id": cid,
+                "video_count": int(row["video_count"] or 0),
+                "latest_video_id": row["latest_video_id"],
+                "names": [name],
+                "key": gkey,
+            }
+            continue
+        grp["video_count"] += int(row["video_count"] or 0)
+        if row["latest_video_id"] and (
+            not grp["latest_video_id"] or row["latest_video_id"] > grp["latest_video_id"]
+        ):
+            grp["latest_video_id"] = row["latest_video_id"]
+            grp["name"] = name
+        if name not in grp["names"]:
+            grp["names"].append(name)
+
+    def _rule_for(grp: dict) -> Optional[dict]:
+        cid = grp["source_channel_id"]
+        if cid:
+            for rule in rules:
+                if (rule.get("youtube_channel_id") or "") == cid:
+                    return rule
+        for nm in grp["names"]:
+            rule = rule_map.get(app_settings.uploader_key(nm))
+            if rule:
+                return rule
+        return None
+
+    out: list[dict] = []
+    covered: set[str] = set()
+    covered_names: set[str] = set()
+    for grp in groups.values():
+        rule = _rule_for(grp) or {}
+        name = rule.get("name") or grp["name"]
+        cid = grp["source_channel_id"] or (rule.get("youtube_channel_id") or "")
+        out.append(
+            {
+                **grp,
+                "name": name,
+                "source_channel_id": cid,
+                "rule": rule,
+                "stat_key": f"cid:{cid}" if cid else app_settings.uploader_key(name),
+            }
+        )
+        covered.add(grp["key"])
+        covered_names.update(app_settings.uploader_key(n) for n in grp["names"])
+
+    # 规则里但库里还没有作品的博主也要出现，否则手工添加后「看不到」
+    for rule in rules:
+        cid = (rule.get("youtube_channel_id") or "").strip()
+        key = f"cid:{cid}" if cid else f"name:{rule['name'].casefold()}"
+        # 规则名已经并入某个频道组（改名后 cid 组）时不要再生一条 0 视频行
+        if key in covered or app_settings.uploader_key(rule["name"]) in covered_names:
+            continue
+        covered.add(key)
+        out.append(
+            {
+                "name": rule["name"],
+                "platform": None,
+                "source_channel_id": cid,
+                "video_count": 0,
+                "latest_video_id": None,
+                "names": [rule["name"]],
+                "key": key,
+                "rule": rule,
+                "stat_key": key if cid else app_settings.uploader_key(rule["name"]),
+            }
+        )
+    return out
+
+
 @router.get("", response_model=PageResponse[UploaderRead])
 def list_uploaders(
     db: DbDep,
     pagination: PaginationDep,
     q: Optional[str] = Query(None, description="按频道名搜索"),
 ):
-    """聚合所有非空 original_uploader，按上传人分组统计。"""
-    base = (
-        select(
-            MusicVideo.original_uploader.label("name"),
-            MusicVideo.source_platform.label("platform"),
-            func.count().label("video_count"),
-            func.max(MusicVideo.id).label("latest_video_id"),
-        )
-        .where(MusicVideo.deleted_at.is_(None))
-        .where(MusicVideo.original_uploader.is_not(None))
-        .where(MusicVideo.original_uploader != "")
-        .group_by(MusicVideo.original_uploader, MusicVideo.source_platform)
-    )
-    if q:
-        like = f"%{q}%"
-        base = base.where(MusicVideo.original_uploader.ilike(like))
-    total = len(db.execute(base).all())
-    rows = db.execute(
-        base.order_by(func.count().desc(), MusicVideo.original_uploader.asc())
-        .offset(pagination.offset)
-        .limit(pagination.limit)
-    ).all()
-    rule_map = _rule_map(db)
+    """聚合所有非空 original_uploader；同一 channel_id 的改名前后名字合并为一行。"""
+    rules = app_settings.read_uploader_rules(db)
+    rule_map = {
+        app_settings.uploader_key(r["name"]): {
+            "video_types": list(r["video_types"]),
+            "youtube_channel_url": r.get("youtube_channel_url", ""),
+            "youtube_channel_id": r.get("youtube_channel_id", ""),
+            "missing_check_enabled": bool(r.get("missing_check_enabled")),
+        }
+        for r in rules
+    }
     stats = _snapshot_stats(db, rule_map)
-    items = [
-        UploaderRead(
-            name=r.name,
-            platform=r.platform,
-            video_count=r.video_count,
-            latest_video_id=r.latest_video_id,
-            video_types=rule_map.get(app_settings.uploader_key(str(r.name)), {}).get(
-                "video_types", []
+    groups = _group_aggregate(db, rules, rule_map)
+    if q:
+        like = q.strip().casefold()
+        groups = [
+            g for g in groups if any(like in str(n).casefold() for n in g["names"])
+        ]
+    groups.sort(
+        key=lambda g: (
+            not (
+                (g.get("rule") or {}).get("video_types")
+                or (g.get("rule") or {}).get("youtube_channel_url")
             ),
-            youtube_channel_url=rule_map.get(app_settings.uploader_key(str(r.name)), {}).get(
-                "youtube_channel_url", ""
-            ),
-            missing_check_enabled=rule_map.get(app_settings.uploader_key(str(r.name)), {}).get(
-                "missing_check_enabled", False
-            ),
-            **_stats_fields(stats, app_settings.uploader_key(str(r.name))),
+            -int(g["video_count"]),
+            str(g["name"]).casefold(),
         )
-        for r in rows
-    ]
+    )
+    total = len(groups)
+    page_groups = groups[pagination.offset : pagination.offset + pagination.limit]
+
+    # 4×4 海报墙：当前页每个频道的最近 16 条视频 id
+    names = sorted({n for g in page_groups for n in g["names"]})
+    recent_by_name: dict[str, list[int]] = {}
+    if names:
+        for name, vid in db.execute(
+            select(MusicVideo.original_uploader, MusicVideo.id)
+            .where(MusicVideo.deleted_at.is_(None))
+            .where(MusicVideo.original_uploader.in_(names))
+            .order_by(MusicVideo.id.desc())
+        ).all():
+            recent_by_name.setdefault(str(name), []).append(int(vid))
+    items: list[UploaderRead] = []
+    for grp in page_groups:
+        rule = grp.get("rule") or {}
+        merged_recent: list[int] = []
+        for nm in grp["names"]:
+            for vid in recent_by_name.get(str(nm), []):
+                if vid not in merged_recent:
+                    merged_recent.append(vid)
+        merged_recent.sort(reverse=True)
+        items.append(
+            UploaderRead(
+                name=grp["name"],
+                platform=grp["platform"],
+                video_count=grp["video_count"],
+                latest_video_id=grp["latest_video_id"],
+                recent_video_ids=merged_recent[:16],
+                video_types=list(rule.get("video_types") or []),
+                youtube_channel_url=rule.get("youtube_channel_url", ""),
+                youtube_channel_id=grp["source_channel_id"],
+                missing_check_enabled=bool(rule.get("missing_check_enabled")),
+                in_library=grp["video_count"] > 0,
+                **_stats_fields(stats, grp["stat_key"]),
+            )
+        )
     return PageResponse(
         items=items,
         total=total,
@@ -259,57 +425,45 @@ def list_uploaders(
         page_size=pagination.page_size,
     )
 
-
 @router.get("/manage", response_model=UploaderManageResult)
 def manage_uploaders(db: DbDep, q: Optional[str] = Query(None, description="按博主名搜索")):
-    """博主管理列表：库内博主 ∪ 已配置规则的博主（规则优先、视频数降序）。"""
+    """博主管理列表：库内博主 ∪ 已配置规则的博主（规则优先、视频数降序）。
+
+    频道身份优先：同一 YouTube channel_id 下的改名前后名字合并为一行；
+    没有 channel_id 的老数据仍按名字（大小写不敏感）去重。
+    """
     rules = app_settings.read_uploader_rules(db)
     rule_map = {
         app_settings.uploader_key(r["name"]): {
             "video_types": list(r["video_types"]),
             "youtube_channel_url": r.get("youtube_channel_url", ""),
+            "youtube_channel_id": r.get("youtube_channel_id", ""),
             "missing_check_enabled": bool(r.get("missing_check_enabled")),
         }
         for r in rules
     }
     stats = _snapshot_stats(db, rule_map)
+    groups = _group_aggregate(db, rules, rule_map)
+    if q:
+        like = q.strip().casefold()
+        groups = [
+            g for g in groups if any(like in str(n).casefold() for n in g["names"])
+        ]
     items: list[UploaderRead] = []
-    seen: set[str] = set()
-    for row in _aggregate(db):
-        # seen 仍按字面（含大小写）去重：同名不同写法的记录都列出来，不隐藏任何一条
-        if str(row["name"]).casefold() in seen:
-            continue
-        seen.add(str(row["name"]).casefold())
-        # 规则与统计查表用归一化键：肉眼同名的重复记录共用同一份配置
-        key = app_settings.uploader_key(str(row["name"]))
-        rule = rule_map.get(key, {})
+    for grp in groups:
+        rule = grp.get("rule") or {}
         items.append(
             UploaderRead(
-                **row,
-                video_types=rule.get("video_types", []),
+                name=grp["name"],
+                platform=grp["platform"],
+                video_count=grp["video_count"],
+                latest_video_id=grp["latest_video_id"],
+                video_types=list(rule.get("video_types") or []),
                 youtube_channel_url=rule.get("youtube_channel_url", ""),
-                missing_check_enabled=rule.get("missing_check_enabled", False),
-                in_library=True,
-                **_stats_fields(stats, key),
-            )
-        )
-    # 规则里但库里还没有作品的博主也要出现，否则手工添加后「看不到」
-    for rule in rules:
-        if rule["name"].casefold() in seen:
-            continue
-        seen.add(rule["name"].casefold())
-        key = app_settings.uploader_key(rule["name"])
-        items.append(
-            UploaderRead(
-                name=rule["name"],
-                platform=None,
-                video_count=0,
-                latest_video_id=None,
-                video_types=list(rule["video_types"]),
-                youtube_channel_url=rule.get("youtube_channel_url", ""),
+                youtube_channel_id=grp["source_channel_id"],
                 missing_check_enabled=bool(rule.get("missing_check_enabled")),
-                in_library=False,
-                **_stats_fields(stats, key),
+                in_library=grp["video_count"] > 0,
+                **_stats_fields(stats, grp["stat_key"]),
             )
         )
     # 已配置（固定类型或频道检测）的排前面，其次按视频数
@@ -321,15 +475,11 @@ def manage_uploaders(db: DbDep, q: Optional[str] = Query(None, description="按�
         )
     )
     items = items[:MANAGE_LIMIT_MAX]
-    if q:
-        like = q.strip().casefold()
-        items = [i for i in items if like in i.name.casefold()]
     return UploaderManageResult(
         items=items,
         total=len(items),
         rule_count=len(rules),
     )
-
 
 @router.get("/rules", response_model=UploaderRulesResult)
 def list_uploader_rules(db: DbDep):
@@ -352,17 +502,47 @@ def replace_uploader_rules(payload: UploaderRulesPayload, db: DbDep, _owner: Own
 # 缺失视频检测
 # ---------------------------------------------------------------------------
 
+def _channel_id_of_uploader(db: DbDep, name: str) -> str:
+    """库内该名字对应的 YouTube channel_id（用于改名后按频道归组）。
+
+    用 uploader_key 比对而不是 SQL 等值：SQLite 的 lower() 只认 ASCII，
+    全角/空白/大小写变体在 SQL 里会被当成两个名字。
+    """
+    key = app_settings.uploader_key(name)
+    rows = db.execute(
+        select(MusicVideo.original_uploader, MusicVideo.source_channel_id)
+        .where(MusicVideo.deleted_at.is_(None))
+        .where(func.lower(MusicVideo.source_platform) == "youtube")
+        .where(MusicVideo.original_uploader.is_not(None))
+        .where(MusicVideo.source_channel_id.is_not(None))
+        .distinct()
+    ).all()
+    for nm, cid in rows:
+        if app_settings.uploader_key(nm) == key and cid:
+            return str(cid).strip()
+    return ""
+
+
 def _has_youtube_videos(db: DbDep, name: str) -> bool:
-    """该博主在库内是否有 YouTube 视频（大小写不敏感比对，与缺失比对同口径）。"""
+    """该博主在库内是否有 YouTube 视频（名字或 channel_id 命中都算）。"""
     key = name.strip().casefold()
-    total = db.execute(
+    cid = _channel_id_of_uploader(db, name)
+    stmt = (
         select(func.count())
         .select_from(MusicVideo)
         .where(MusicVideo.deleted_at.is_(None))
         .where(func.lower(MusicVideo.source_platform) == "youtube")
-        .where(func.lower(func.coalesce(MusicVideo.original_uploader, "")) == key)
-    ).scalar_one()
-    return int(total) > 0
+    )
+    if cid:
+        stmt = stmt.where(
+            or_(
+                func.lower(func.coalesce(MusicVideo.original_uploader, "")) == key,
+                MusicVideo.source_channel_id == cid,
+            )
+        )
+    else:
+        stmt = stmt.where(func.lower(func.coalesce(MusicVideo.original_uploader, "")) == key)
+    return int(db.execute(stmt).scalar_one()) > 0
 
 
 def _report(db: DbDep, uploader: str) -> MissingReport:
@@ -372,7 +552,8 @@ def _report(db: DbDep, uploader: str) -> MissingReport:
     # 非 YouTube 博主：整块不渲染，直接返回空报告
     if not _has_youtube_videos(db, name):
         return MissingReport(uploader=name, has_youtube_videos=False)
-    channel = app_settings.find_uploader_channel(db, name)
+    cid = _channel_id_of_uploader(db, name)
+    channel = app_settings.find_uploader_channel(db, name, channel_id=cid)
     configured = bool(channel and channel["youtube_channel_url"])
     if not configured:
         # 未配置频道：不返回任何快照/diff 明细（历史快照数据保留在库中，重新配置后可恢复展示）
@@ -380,17 +561,23 @@ def _report(db: DbDep, uploader: str) -> MissingReport:
             uploader=name,
             has_youtube_videos=True,
             channel_configured=False,
+            channel_id=cid or (channel or {}).get("youtube_channel_id", ""),
             missing_check_enabled=bool(channel and channel["missing_check_enabled"]),
         )
-    data = youtube_service.missing_report(db, name)
+    data = youtube_service.missing_report(
+        db, name, channel_id=channel.get("youtube_channel_id") or cid
+    )
     return MissingReport(
         uploader=name,
         has_youtube_videos=True,
         channel_configured=True,
+        channel_id=channel.get("youtube_channel_id") or cid,
         missing_check_enabled=bool(channel and channel["missing_check_enabled"]),
-        # 宽容匹配命中（原博主名与规则名肉眼同名但写法不同）时标注出来
-        matched_rule_name=channel["name"] if channel.get("matched_by") == "loose" else "",
-        **{k: v for k, v in data.items() if k != "uploader"},
+        # 非逐字命中（同名不同写法 / 改名后的 channel_id 命中）时回填规则名
+        matched_rule_name=(
+            channel["name"] if channel.get("matched_by") in {"loose", "channel_id"} else ""
+        ),
+        **{k: v for k, v in data.items() if k not in {"uploader", "channel_id"}},
     )
 
 
@@ -423,10 +610,11 @@ def check_missing_videos(payload: MissingCheckRequest, db: DbDep, _owner: OwnerD
 
 @router.post("/channel-probe")
 def probe_uploader_channel(payload: ChannelProbeRequest, _owner: OwnerDep):
-    """校验 YouTube 频道地址是否可用（出网 1-2 quota，不落库）。
+    """校验 YouTube 频道地址是否可用（出网 1-2 quota，端点本身不落库）。
 
     供「设置 · 资料库 · 博主管理」的「测试」按钮即时确认地址能否解析、
-    以及解析到的频道名是否正确（地址写错时返回 400 与原因）。
+    以及解析到的频道名 / channel_id 是否正确（地址写错时返回 400 与原因）。
+    前端测试成功后会把这个 channel_id 随博主规则一起保存。
     """
     ref = (payload.channel or "").strip()
     if not ref:
@@ -437,6 +625,29 @@ def probe_uploader_channel(payload: ChannelProbeRequest, _owner: OwnerDep):
         raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"YouTube 请求失败：{e}") from e
+
+
+@router.post("/backfill-channel-ids")
+def backfill_channel_ids(
+    db: DbDep,
+    _owner: OwnerDep,
+    payload: Optional[BackfillChannelRequest] = None,
+):
+    """从 .info.json 侧车回填库内视频的 YouTube channel_id。
+
+    只补 `source_channel_id` 为空的行；`include_rules=true` 时顺带探测已配置频道 URL
+    的博主规则。**不会修改 missing_check_enabled**（缺失检测仍由用户手动勾选）。
+    """
+    body = payload or BackfillChannelRequest()
+    video_stats = uploader_channel_service.backfill_video_channel_ids(
+        db, dry_run=body.dry_run
+    )
+    rule_stats = {"rules": 0, "updated": 0, "skipped": 0, "errors": 0}
+    if body.include_rules and not body.dry_run:
+        rule_stats = uploader_channel_service.backfill_rule_channel_ids(
+            db, youtube_service.probe_channel
+        )
+    return {"videos": video_stats, "rules": rule_stats}
 
 
 @router.get("/missing-videos/{video_id}/cover")

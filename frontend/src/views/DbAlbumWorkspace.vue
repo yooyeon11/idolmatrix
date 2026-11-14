@@ -674,7 +674,7 @@ async function addTrack() {
 /* 内嵌进设置页·资料库：不占整屏、去掉自身容器留白（面板自带 padding） */
 .mv-page--embedded { min-height: 0; }
 .mv-page--embedded .mv-container { padding: 0; }
-.mv-container { max-width: 1280px; margin: 0 auto; padding: 14px 22px 96px; }
+.mv-container { max-width: var(--sa-content-max, 1280px); margin: 0 auto; padding: 14px 22px 96px; }
 .ws-tab-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .back-btn { border: none; background: none; color: var(--sa-text-tertiary); font-size: 12px; cursor: pointer; }
 .load-error { padding: 12px 16px; border-radius: 10px; background: rgba(208,48,80,.1); color: var(--dh-bad); font-size: 13px; margin-bottom: 16px; }

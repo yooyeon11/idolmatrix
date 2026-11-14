@@ -319,14 +319,14 @@ async function saveSocialMedia(map: Record<string, string>) {
   }
 }
 
-async function toggleHideFromHome(ev: Event) {
+async function toggleFeaturedInHome(ev: Event) {
   const a = data.value?.artist
   if (!a) return
   const checked = (ev.target as HTMLInputElement).checked
   saveError.value = ''
-  savingField.value = 'hide_from_home'
+  savingField.value = 'featured_in_home'
   try {
-    await artistsApi.update(a.id, { hide_from_home: checked })
+    await artistsApi.update(a.id, { featured_in_home: checked })
     await load()
   } catch (e) {
     saveError.value = e instanceof Error ? e.message : '保存失败'
@@ -768,18 +768,18 @@ async function removeCompany(relationId: number) {
             <section class="node node-teal">
               <header class="node-head">
                 <span class="node-dot dot-teal" />
-                <b>首页主舞台</b>
-                <span class="node-note">控制杂志/影院主题轮动池</span>
+                <b>首页轮动</b>
+                <span class="node-note">勾选后才加入首页主舞台轮动池</span>
               </header>
               <div class="node-body">
                 <label class="home-toggle">
                   <input
                     type="checkbox"
-                    :checked="!!data.artist.hide_from_home"
-                    :disabled="savingField === 'hide_from_home'"
-                    @change="toggleHideFromHome"
+                    :checked="!!data.artist.featured_in_home"
+                    :disabled="savingField === 'featured_in_home'"
+                    @change="toggleFeaturedInHome"
                   />
-                  <span>不在首页轮动展示</span>
+                  <span>加入首页轮动展示</span>
                 </label>
               </div>
             </section>
@@ -1091,7 +1091,7 @@ async function removeCompany(relationId: number) {
 .mv-page--embedded { min-height: 0; }
 .mv-page--embedded .mv-container { padding: 0; }
 
-.mv-container { max-width: 1280px; margin: 0 auto; padding: 14px 22px 96px; }
+.mv-container { max-width: var(--sa-content-max, 1280px); margin: 0 auto; padding: 14px 22px 96px; }
 
 .ws-tab-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 

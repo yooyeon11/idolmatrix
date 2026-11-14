@@ -1,8 +1,16 @@
-"""视频类型归一 + 分辨率分档：视频元数据的共享口径。"""
+"""视频类型归一 + 分辨率分档 + 机位/场次：视频元数据的共享口径。"""
 
 from __future__ import annotations
 
 from typing import Any, Iterable, Optional, Sequence
+
+from app.core.vocab import (
+    build_session_label,
+    detect_unknown_camera,
+    is_non_camera_tail,
+    normalize_camera,
+    validate_session_label,
+)
 
 COVER_VIDEO_TYPE = "CoverStage"
 MIX_VIDEO_TYPE = "MixEdit"
@@ -96,6 +104,102 @@ def is_short_video(
     """
     _, types = normalize_video_types(video_types, video_type)
     return SHORT_VIDEO_TYPE in types
+
+
+# ===== 机位 / 场次（业主 2026-10-17 口径，词表见 app/core/vocab.py）=====
+
+
+def title_camera_tail(name: Optional[str]) -> str:
+    """取 name 的「尾标」：最后一个方括号段；没有方括号时取末尾 3 个词。
+
+    机位词只出现在尾标里（如 `Music Bank FanCam` / `[Show Champion OnePick Cam]`），
+    拿整条标题去匹配会把歌名里的 `Cam` 也算进来。
+    """
+    import re
+
+    text = (name or "").strip()
+    if not text:
+        return ""
+    m = re.search(r"\[([^\]]+)\]\s*$", text)
+    if m:
+        return m.group(1).strip()
+    return " ".join(text.split()[-3:])
+
+
+def resolve_camera_angle(
+    name: Optional[str], explicit: Optional[str] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """解析机位，返回 `(规范值, 词表外可疑片段)`。
+
+    - 显式给了值 → 只认词表（含别名归一）；认不出 → 可疑片段就是它本身
+    - 没给 → 从 name 尾标按词表匹配；匹配不到再看有没有「像机位」的词
+    - 两者都没有 → `(None, None)`，即未标注
+
+    调用方拿到可疑片段后应**阻断入库**并提示业主确认是否扩充词表
+    （业主口径：词表外一律不入库）。
+    """
+    raw = (explicit or "").strip()
+    if raw:
+        normalized = normalize_camera(raw)
+        if normalized:
+            return normalized, None
+        return None, raw
+    tail = title_camera_tail(name)
+    if not tail:
+        return None, None
+    # 纯栏目/类型尾标（`[Other]` / `[PerformanceVideo]` / `[CoverStage]`…）不是机位
+    if is_non_camera_tail(tail):
+        return None, None
+    normalized = normalize_camera(tail)
+    if normalized:
+        return normalized, None
+    return None, detect_unknown_camera(tail)
+
+
+def resolve_session_label(
+    explicit: Optional[str],
+    performance_date: Any = None,
+    published_date: Any = None,
+    event_name: Optional[str] = None,
+    uploader: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """解析场次标签，返回 `(值, 错误说明)`。
+
+    - 显式给了值 → 只校验格式，不覆盖
+    - 没给 → 自动生成：`YYMMDD - 活动名`，活动名缺失回退频道名
+    """
+    raw = (explicit or "").strip()
+    if raw:
+        err = validate_session_label(raw)
+        return (None, err) if err else (raw, None)
+    return build_session_label(performance_date, published_date, event_name, uploader), None
+
+
+def maybe_regenerate_session(
+    *,
+    old_label: Optional[str],
+    old_performance_date: Any,
+    old_published_date: Any,
+    old_event_name: Optional[str],
+    old_uploader: Optional[str],
+    new_performance_date: Any,
+    new_published_date: Any,
+    new_event_name: Optional[str],
+    new_uploader: Optional[str],
+) -> Optional[str]:
+    """编辑保存时是否要重算场次。
+
+    只在「原值仍是自动生成的那一个」时重算 —— 业主手改过的场次（例如加了备注）
+    视为 override，不被日期/活动名改动覆盖。
+    """
+    auto_old = build_session_label(
+        old_performance_date, old_published_date, old_event_name, old_uploader
+    )
+    if (old_label or "").strip() != (auto_old or "").strip():
+        return None  # 手改过 → 保持
+    return build_session_label(
+        new_performance_date, new_published_date, new_event_name, new_uploader
+    )
 
 
 def _person_label(entity: Any) -> Optional[str]:

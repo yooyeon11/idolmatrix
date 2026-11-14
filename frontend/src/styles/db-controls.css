@@ -220,36 +220,8 @@ html[data-theme='dark'] .sa-select .n-base-selection {
   line-height: calc(var(--n-height) - 12px);
 }
 
-/* 下拉面板：naive-ui 把菜单 teleport 到 body，只能在全局定义（类名随 :menu-props 传入） */
-.sa-select-menu.n-base-select-menu {
-  border-radius: 16px;
-  padding: 6px;
-  background-color: var(--sa-elevated);
-  border: 1px solid var(--sa-border-subtle);
-  box-shadow:
-    0 12px 32px rgba(15, 23, 42, 0.1),
-    0 2px 8px rgba(15, 23, 42, 0.06);
-}
-.sa-select-menu .n-base-select-option {
-  border-radius: 8px;
-  font-size: 13px;
-  color: var(--sa-text-primary);
-}
-.sa-select-menu .n-base-select-option--pending::before,
-.sa-select-menu .n-base-select-option--selected::before {
-  background-color: var(--sa-hover);
-  border-radius: 8px;
-}
-.sa-select-menu .n-base-select-option--selected {
-  color: var(--sa-text-primary);
-}
-.sa-select-menu .n-base-select-option__check {
-  color: var(--sa-text-primary);
-}
-.sa-select-menu .n-empty {
-  font-size: 12px;
-  color: var(--sa-text-tertiary);
-}
+/* 下拉面板：naive-ui 把菜单 teleport 到 body，样式统一放在 styles/glass-popover.css
+   （那里有 !important 才能压过 naive 的内联主题变量；这里不再重复定义，避免两套值打架） */
 /* 选项里的色点（强调色选择器用，见 SettingsView 的 renderAccentLabel）。
    ⚠ 下拉挂在 body 下 + 已选值由 render-label 渲染 —— 两处都拿不到 scoped 属性，必须放全局。 */
 .sa-accent-opt {

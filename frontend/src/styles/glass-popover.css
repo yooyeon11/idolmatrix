@@ -1,0 +1,97 @@
+/* =========================================================================
+   全站下拉浮层（select 菜单 / dropdown 菜单）—— 统一皮肤
+   =========================================================================
+   为什么做成全局：项目里的下拉有两类
+     1. SaSelect（naive-ui NSelect 封装，带远程搜索/多选/自由输入）
+     2. SaGlassSelect（自绘下拉，列表页筛选）
+   两类的浮层都 teleport 到 body 下，scoped 样式够不着；naive 又把主题变量
+   内联在元素 style 上，所以只能用 !important 覆盖。
+
+   规范（2026-11-14 起与「浏览」页 `.pop-menu` 对齐）：
+     16px 圆角 · **实底 --sa-elevated** · 1px --sa-border · 双层投影 · 10px 内衬
+     选项 10px 圆角 / 12.5px / hover --sa-hover / 选中不反相（主色 + 600）
+
+   ⚠ 旧版是「88% 半透明 + blur(24px) + 22px 圆角 + 选中反相」。
+   半透明底叠在白页面上会透出下层文字，看起来像「菜单被白色蒙住」，
+   业主 2026-11-14 报的「下拉第一项被白色遮挡」就是它。
+   ========================================================================= */
+
+:root {
+  --pop-menu-radius: 16px;
+  --pop-menu-bg: var(--sa-elevated);
+  --pop-menu-border: var(--sa-border);
+  --pop-menu-shadow:
+    0 12px 32px -4px rgba(0, 0, 0, 0.35),
+    0 4px 12px -2px rgba(0, 0, 0, 0.18);
+  --pop-menu-item-radius: 10px;
+}
+
+/* ---- 浮层容器 ---- */
+.sa-select-menu,
+.n-base-select-menu,
+.n-dropdown-menu {
+  border-radius: var(--pop-menu-radius) !important;
+  background: var(--pop-menu-bg) !important;
+  border: 1px solid var(--pop-menu-border) !important;
+  box-shadow: var(--pop-menu-shadow) !important;
+  padding: 10px !important;
+  overflow: hidden;
+}
+
+/* ---- 选项 ---- */
+.sa-select-menu .n-base-select-option,
+.n-base-select-menu .n-base-select-option,
+.n-dropdown-menu .n-dropdown-option-body {
+  border-radius: var(--pop-menu-item-radius) !important;
+  margin: 0 !important;
+  padding: 8px 12px !important;
+  font-size: 12.5px;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.sa-select-menu .n-base-select-option:hover,
+.n-base-select-menu .n-base-select-option:hover,
+.n-dropdown-menu .n-dropdown-option-body:hover {
+  background: var(--sa-hover) !important;
+}
+
+/* 选中：不反相，只加粗 + 主色（与 SaGlassSelect 的「加粗 + 勾」同口径） */
+.sa-select-menu .n-base-select-option.n-base-select-option--selected,
+.n-base-select-menu .n-base-select-option.n-base-select-option--selected {
+  background: transparent !important;
+  color: var(--sa-text-primary) !important;
+  font-weight: 600;
+}
+.sa-select-menu .n-base-select-option.n-base-select-option--selected:hover,
+.n-base-select-menu .n-base-select-option.n-base-select-option--selected:hover {
+  background: var(--sa-hover) !important;
+}
+.sa-select-menu .n-base-select-option.n-base-select-option--selected .n-base-select-option__content,
+.n-base-select-menu .n-base-select-option.n-base-select-option--selected .n-base-select-option__content {
+  color: var(--sa-text-primary) !important;
+}
+
+/* 分组标题 / 空状态：去掉 naive 的灰底块 */
+.sa-select-menu .n-base-select-group-header,
+.n-base-select-menu .n-base-select-group-header {
+  padding: 8px 12px 4px !important;
+  opacity: 0.6;
+}
+
+/* ---- 展开动画 ---- */
+.n-base-select-menu,
+.n-dropdown-menu {
+  animation: spatialPopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes spatialPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

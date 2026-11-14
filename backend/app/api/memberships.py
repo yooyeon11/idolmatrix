@@ -84,6 +84,7 @@ def list_by_group(group_id: int, db: DbDep, status: Optional[str] = Query(None))
         item.artist_stage_name = a.stage_name
         item.artist_avatar_path = a.avatar_path
         item.artist_uid = a.uid
+        item.artist_updated_at = getattr(a, "updated_at", None)
         out.append(item)
     return out
 
@@ -106,12 +107,49 @@ def list_by_artist(artist_id: int, db: DbDep, status: Optional[str] = Query(None
         item.group_chinese_name = g.chinese_name
         item.group_type = g.group_type
         item.group_uid = g.uid
+        item.group_avatar_path = g.avatar_path
+        item.group_updated_at = getattr(g, "updated_at", None)
         root = root_group(db, g)
         if root is not None and root.id != g.id:
             item.root_group_name = root.name
             item.root_group_chinese_name = root.chinese_name
             item.root_group_type = root.group_type
             item.root_group_uid = root.uid
+        out.append(item)
+    return out
+
+
+@router.get("/by_artists", response_model=List[MembershipReadWithGroup])
+def list_by_artists(
+    db: DbDep,
+    ids: str = Query(..., description="逗号分隔的艺人 id，最多 60 个"),
+    status: Optional[str] = Query(None),
+):
+    """批量版 /by_artist/{id}：首页立绘墙需要 20 位艺人的所属组合，逐个请求会打 20 次。"""
+    try:
+        artist_ids = [int(x) for x in ids.split(",") if x.strip()][:60]
+    except ValueError:
+        raise HTTPException(400, "ids 必须是逗号分隔的整数")
+    if not artist_ids:
+        return []
+    stmt = (
+        select(GroupMembership, Group)
+        .join(Group, GroupMembership.group_id == Group.id)
+        .where(
+            GroupMembership.artist_id.in_(artist_ids),
+            Group.deleted_at.is_(None),
+        )
+    )
+    if status:
+        stmt = stmt.where(GroupMembership.status == status)
+    rows = db.execute(stmt.order_by(GroupMembership.join_date.asc())).all()
+    out = []
+    for m, g in rows:
+        item = MembershipReadWithGroup.model_validate(m)
+        item.group_name = g.name
+        item.group_chinese_name = g.chinese_name
+        item.group_type = g.group_type
+        item.group_uid = g.uid
         out.append(item)
     return out
 

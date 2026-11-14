@@ -16,3 +16,6 @@ argon2-cffi>=23.1.0
 # 封面焦点检测（人脸居中裁切）例外地使用 OpenCV：YuNet/Haar 均为纯本地推理，无网络/API 依赖；
 # 未安装时功能自动降级为居中显示，不影响其余能力。
 opencv-python-headless>=4.9.0
+
+# yt-dlp impersonate（YouTube 429 缓解）
+curl_cffi>=0.7.0

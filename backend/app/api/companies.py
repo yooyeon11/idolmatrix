@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import func, select
 
 from app.api.guards import require_active
+from app.core.audit import mark_before, mark_changes
 from app.core.deps import DbDep, PaginationDep
 from app.services.soft_delete_service import soft_delete_company
 from app.models.artist import Artist
@@ -107,16 +108,19 @@ def get_company(company_id: int, db: DbDep):
 
 
 @router.patch("/{company_id}", response_model=CompanyRead)
-def update_company(company_id: int, payload: CompanyUpdate, db: DbDep):
+def update_company(company_id: int, payload: CompanyUpdate, request: Request, db: DbDep):
     company = Company.get_active(db, company_id)
     if not company:
         raise HTTPException(404, "Company 不存在")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    before = mark_before(company, data.keys())
+    for k, v in data.items():
         setattr(company, k, v)
     if company.parent_company_id is not None:
         require_active(db, Company, company.parent_company_id, "Company(parent)")
     db.commit()
     db.refresh(company)
+    mark_changes(request, before, data)
     return company
 
 

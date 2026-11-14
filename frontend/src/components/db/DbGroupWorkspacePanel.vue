@@ -264,14 +264,14 @@ async function saveSocialMedia(map: Record<string, string>) {
   }
 }
 
-async function toggleHideFromHome(ev: Event) {
+async function toggleFeaturedInHome(ev: Event) {
   const g = data.value?.group
   if (!g) return
   const checked = (ev.target as HTMLInputElement).checked
   saveError.value = ''
-  savingField.value = 'hide_from_home'
+  savingField.value = 'featured_in_home'
   try {
-    await groupsApi.update(g.id, { hide_from_home: checked })
+    await groupsApi.update(g.id, { featured_in_home: checked })
     await load()
   } catch (e) {
     saveError.value = e instanceof Error ? e.message : '保存失败'
@@ -1072,18 +1072,18 @@ async function addAlbum() {
             </section>
             <section class="node media-node">
               <header class="node-head">
-                <b>首页主舞台</b>
-                <span class="node-note">控制杂志/影院主题轮动池</span>
+                <b>首页轮动</b>
+                <span class="node-note">勾选后才加入首页主舞台轮动池</span>
               </header>
               <div class="node-body">
                 <label class="home-toggle">
                   <input
                     type="checkbox"
-                    :checked="!!data.group.hide_from_home"
-                    :disabled="savingField === 'hide_from_home'"
-                    @change="toggleHideFromHome"
+                    :checked="!!data.group.featured_in_home"
+                    :disabled="savingField === 'featured_in_home'"
+                    @change="toggleFeaturedInHome"
                   />
-                  <span>不在首页轮动展示</span>
+                  <span>加入首页轮动展示</span>
                 </label>
               </div>
             </section>
@@ -1242,7 +1242,7 @@ async function addAlbum() {
   --dh-warn: #d97706;
   --dh-bad: #d03050;
 }.mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
   padding: 14px 22px 64px;
 }

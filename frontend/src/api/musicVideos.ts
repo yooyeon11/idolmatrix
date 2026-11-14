@@ -6,11 +6,14 @@ import type {
   VideoScore,
   MusicVideo,
   MusicVideoBrief,
+  MusicVideoRelated,
   MessageResponse,
+  StageMatrix,
   Pagination,
   ResolutionFacetResponse,
   VideoPathSuggestion,
   VideoRelocateResult,
+  VideoPublish,
 } from '@/types/models'
 
 export interface CoverFrameItem {
@@ -72,6 +75,52 @@ export const musicVideosApi = {
   list(params: ListParams = {}, config: AxiosRequestConfig = {}) {
     return http.get<Pagination<MusicVideo>>('/music-videos', { params, ...config }).then((r) => r.data)
   },
+
+  /** 右栏推荐：同曲 / 同组合（含小分队、成员 solo）/ 同公司 / 同场活动 + 相关艺人 */
+  related(id: number) {
+    return http.get<MusicVideoRelated>(`/music-videos/${id}/related`).then((r) => r.data)
+  },
+
+  // ===== B 站分发（P0 在线版）=====
+  /** 当前视频的 B 站绑定；未绑定返回 null */
+  getPublish(id: number) {
+    return http
+      .get<VideoPublish | null>(`/music-videos/${id}/publish`)
+      .then((r) => r.data)
+  },
+  /** 绑定/改绑 BV 号（后端 upsert，同一视频只有一条） */
+  putPublish(
+    id: number,
+    payload: {
+      bvid: string
+      page?: number
+      origin?: string
+      owned_by_me?: boolean
+      status?: string
+    },
+  ) {
+    return http
+      .put<VideoPublish>(`/music-videos/${id}/publish`, payload)
+      .then((r) => r.data)
+  },
+  /** 解绑（软删除） */
+  deletePublish(id: number) {
+    return http
+      .delete<MessageResponse>(`/music-videos/${id}/publish`)
+      .then((r) => r.data)
+  },
+  /** 把「完整地址 / 分享文案 / 裸 BV」归一化，供保存前预览 */
+  parsePublish(id: number, raw: string) {
+    return http
+      .post<{
+        bvid: string | null
+        page: number
+        error: string | null
+        embed_url: string | null
+      }>(`/music-videos/${id}/publish/parse`, { raw })
+      .then((r) => r.data)
+  },
+
   listAll: listAllVideos,
   subtitles(id: number) {
     return http
@@ -151,6 +200,10 @@ export const musicVideosApi = {
     return http
       .get<{ count: number; items: VideoChapter[] }>(`/music-videos/${id}/chapters`)
       .then((r) => r.data)
+  },
+  /** 打歌期三维矩阵：同曲（或同活动）视频按 演出日 × 成员 × 机位 分组 */
+  stageMatrix(id: number) {
+    return http.get<StageMatrix>(`/music-videos/${id}/stage-matrix`).then((r) => r.data)
   },
   // ===== AI 视频评分（实验功能） =====
   /** 对单条视频执行 AI 评分（抽帧送视觉模型）。creds 为用户配置的评分 AI 凭据。 */

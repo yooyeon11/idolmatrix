@@ -94,7 +94,7 @@ class GroupWorkspaceGroup(BaseModel):
     avatar_path: Optional[str] = None
     banner_path: Optional[str] = None
     social_media: Optional[dict] = None
-    hide_from_home: bool = False
+    featured_in_home: bool = False
     external_links: List[dict] = []
 
 
@@ -301,7 +301,7 @@ class ArtistWorkspaceArtist(BaseModel):
     avatar_path: Optional[str] = None
     banner_path: Optional[str] = None
     social_media: Optional[dict] = None
-    hide_from_home: bool = False
+    featured_in_home: bool = False
     external_links: List[dict] = []
 
 
@@ -318,6 +318,30 @@ class ArtistWorkspaceResponse(BaseModel):
     issues: List[dict] = []
     issue_counts: dict = {}
     completeness_checklist: List[str] = []
+
+
+# ===== 首页轮动「艺人展示」列表（只读）=====
+
+
+class ShowcaseRow(BaseModel):
+    """一行 = 一个组合或一个艺人；勾选写入走现有 PATCH 接口。"""
+
+    type: str  # group | artist
+    id: int
+    uid: str
+    name: str
+    chinese_name: Optional[str] = None
+    avatar_path: Optional[str] = None
+    banner_path: Optional[str] = None
+    has_poster: bool = False
+    has_banner: bool = False
+    featured_in_home: bool = False
+    video_count: int = 0
+
+
+class ShowcaseListResponse(BaseModel):
+    items: List[ShowcaseRow] = []
+    featured_count: int = 0
 
 
 # ===== 资料库列表：艺人 / 专辑 / 歌曲（只读，与组合列表同口径）=====

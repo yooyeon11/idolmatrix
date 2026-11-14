@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.models.group import Group
 from app.services import fandom_service, wiki_service
-from app.services import ai_service
+from app.services import llm_core
 
 # 允许通过资料源写入的字段白名单（均为无副作用的标量字段）
 APPLICABLE_FIELDS = {
@@ -148,7 +148,7 @@ def _fandom_preview(title: str, group: Group, info_raw: Optional[dict] = None) -
         items.append(_diff_item(group, "debut_date", _clean_date(ff["debut_date"]), "K-pop Fandom"))
     if detail.get("biography"):
         bio = _norm(detail["biography"])
-        translated = ai_service.translate_to_simplified(bio)
+        translated = llm_core.translate_to_simplified(bio)
         if translated:
             bio = translated
             items.append(_diff_item(group, "description", bio, "K-pop Fandom（已译）"))
@@ -207,7 +207,7 @@ def _wikidata_preview(qid: str, group: Group) -> dict:
         items.append(_diff_item(group, "chinese_name", _norm(info["label_zh"]), "Wikidata"))
     if _norm(info.get("wikipedia_extract")):
         wiki_desc = _norm(info["wikipedia_extract"])
-        wiki_desc_translated = ai_service.translate_to_simplified(wiki_desc)
+        wiki_desc_translated = llm_core.translate_to_simplified(wiki_desc)
         if wiki_desc_translated:
             items.append(
                 _diff_item(group, "description", wiki_desc_translated, "Wikipedia（已译）")
@@ -393,7 +393,7 @@ def _baidu_preview(url: str, group: Group) -> dict:
     if title:
         items.append(_diff_item(group, "chinese_name", title, "百度百科"))
     if extract:
-        baidu_desc_translated = ai_service.translate_to_simplified(extract)
+        baidu_desc_translated = llm_core.translate_to_simplified(extract)
         if baidu_desc_translated:
             items.append(_diff_item(group, "description", baidu_desc_translated, "百度百科（已译）"))
         else:
@@ -1013,7 +1013,7 @@ def _ai_albums_from_pages(
         f"{body}\n\n"
         '返回 JSON：{"albums":[{"name":"发行物名","type":"专辑/迷你专辑/EP/单曲","year":"YYYY"}]}'
     )
-    from app.services.ai_service import chat_completion, parse_json
+    from app.services.llm_core import chat_completion, parse_json
 
     try:
         raw = chat_completion(cfg, [
@@ -2366,7 +2366,7 @@ def _ai_gap_fill_members(
     import logging
 
     from app.models.artist import Artist
-    from app.services.ai_service import chat_completion, parse_json
+    from app.services.llm_core import chat_completion, parse_json
 
     logger = logging.getLogger("app.source_sync")
     meta = {"status": "skipped", "filled_fields": 0, "members_touched": 0, "error": None}

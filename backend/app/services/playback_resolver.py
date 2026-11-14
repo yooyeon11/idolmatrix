@@ -135,6 +135,12 @@ class PlaybackDecision:
         }
 
 
+# 8K 门槛（短边）：>= 4320 视为 8K。
+# 8K AV1 解码只能靠客户端硬解，服务端实时转码在实测里只有 0.7 倍速（必然卡死），
+# 因此 8K 的决策原则是「能直连就直连，不能也照实标出来」，不做静默降档。
+UHD_8K_SHORT = 4320
+
+
 def resolve_playback_strategy(
     source: MediaInfo,
     client: Optional[ClientCapabilities] = None,
@@ -156,6 +162,14 @@ def resolve_playback_strategy(
         client_max_width=client.max_width,
     )
     quality = _clamp_quality(requested_quality, available)
+    # 客户端明确报了分辨率上限（手机）时，original 不能当「按源尺寸转码」用：
+    # original 在 available 里恒可用，若不在这里收敛，手机请求原画会得到
+    # 4K/8K 的 H.264 实时转码 —— 服务端根本追不上，表现就是转圈后失败。
+    if quality == "original" and _source_exceeds_client(source, client):
+        for name in available:
+            if name != "original":
+                quality = name
+                break
 
     # ---- 1. Direct Play：原文件直接播放 ----
     # Direct Play 只能交付原始分辨率：用户显式选了较低档位（如 1080P 源选 720P）
@@ -213,6 +227,11 @@ def resolve_playback_strategy(
         quality_rung(quality), source.width, source.height
     )
     reason = _transcode_reason(source, client, quality)
+    if short_side(source.width, source.height) >= UHD_8K_SHORT:
+        reason = (
+            f"8K 源：{reason}。8K 只能靠客户端硬解，服务端实时转码会严重卡顿，"
+            "建议换支持 AV1 硬解的设备或选择 4K 档"
+        )
     return PlaybackDecision(
         play_mode=PLAY_MODE_TRANSCODE,
         quality=quality,
@@ -229,6 +248,19 @@ def resolve_playback_strategy(
         profile=profile,
         available_qualities=available,
     )
+
+
+def _source_exceeds_client(source: MediaInfo, client: ClientCapabilities) -> bool:
+    """源分辨率是否超出客户端上限（短边对 max_height、长边对 max_width）。"""
+    if client.max_height <= 0 and client.max_width <= 0:
+        return False
+    short = short_side(source.width, source.height)
+    long = long_side(source.width, source.height)
+    if client.max_height > 0 and short > client.max_height:
+        return True
+    if client.max_width > 0 and long > client.max_width:
+        return True
+    return False
 
 
 def can_direct_play(source: MediaInfo, client: ClientCapabilities) -> Optional[str]:
@@ -275,6 +307,13 @@ def can_direct_stream(
     """Direct Stream 可行性（视频不重编码的 remux）；返回 None=可行。"""
     if not _original_meets_request(quality, source):
         return "需要降低分辨率，无法仅 remux"
+    # ★ Direct Stream 的交付形态是 HLS（mpegts / fMP4），前提是客户端能接 MSE。
+    # 缺这条会让「伪 MSE」设备（vivo / 华为定制内核：MediaSource 对象在，但
+    # isTypeSupported 全 false、decodingInfo 却报 supported）被判为可直出 →
+    # 前端 hls.js 挂不上，而 compat 兜底只服务 transcode 会话 → 400 →
+    # 播放立刻失败（业主 2026-11-09 实拍：vivo Pad 点原画直接报错）。
+    if not (client.supports_hls or client.supports_fmp4):
+        return "客户端不支持 HLS/fMP4 交付（无可用 MSE），需转码 + 兼容版 MP4"
     vs = source.video_stream
     if not vs:
         return "无视频流"

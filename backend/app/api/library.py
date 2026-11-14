@@ -60,6 +60,19 @@ router = APIRouter(prefix="/library", tags=["library"])
 logger = logging.getLogger(__name__)
 
 
+def _norm_name(value: str) -> str:
+    """把历史遗留的代理字符路径还原成正常 UTF-8 文本。
+
+    早期容器没有 locale，Python 按 ASCII + surrogateescape 解码文件名，
+    中文/韩文标题会变成孤立代理字符；这种字符串传给浏览器会导致
+    encodeURIComponent 抛错、按路径查清单失败（清单卡片直接消失）。
+    """
+    try:
+        return value.encode("utf-8", "surrogateescape").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+
+
 @router.get("/scan", response_model=List[ScannedFileItem])
 def scan_endpoint(db: DbDep):
     """读取 incoming_files 缓存表，返回所有待整理文件及其技术字段。
@@ -142,8 +155,8 @@ def scan_endpoint(db: DbDep):
             issues.append("suspicious_file")
         items.append(
             ScannedFileItem(
-                path=r.file_path,
-                file_name=r.file_name,
+                path=_norm_name(r.file_path),
+                file_name=Path(_norm_name(r.file_path)).name,
                 file_size=r.file_size,
                 duration=int(r.duration) if r.duration is not None else None,
                 width=r.width,
@@ -159,6 +172,22 @@ def scan_endpoint(db: DbDep):
     if dirty:
         db.commit()
     return items
+
+
+@router.post("/scan/reset")
+def scan_reset_endpoint(db: DbDep):
+    """清空待整理缓存表（不删磁盘文件），下一轮扫描会重新落库。
+
+    用于历史脏数据（文件名编码坏掉、行对不上文件）时一键重建索引。
+    """
+    from app.models.incoming_file import IncomingFile
+    from app.models.ingest import IngestManifest
+
+    files = db.query(IncomingFile).delete()
+    # 清单按路径关联，索引重建后旧清单会变成孤儿：一并清掉，等重新生成
+    manifests = db.query(IngestManifest).delete()
+    db.commit()
+    return {"cleared_files": files, "cleared_manifests": manifests}
 
 
 @router.post("/scan/sync")

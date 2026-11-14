@@ -75,6 +75,25 @@ class WatchPingResult(ORMModel):
     completed: bool = False
 
 
+class StatsHeatItem(ORMModel):
+    """双轴热度：内容力（库存） × 观看热度（行为）。"""
+
+    kind: str  # artist | group
+    id: int
+    uid: str
+    name: str
+    avatar_path: Optional[str] = None
+    video_count: int = 0
+    duration_seconds: int = 0
+    plays: int = 0
+    seconds_watched: int = 0
+    completion_rate: float = 0.0
+    favorites: int = 0
+    content_score: float = 0.0
+    engagement_score: float = 0.0
+    quadrant: str = "new"  # both | content | engagement | new
+
+
 class LibraryStats(ORMModel):
     overview: StatsOverview
     range: str = "all"
@@ -84,6 +103,7 @@ class LibraryStats(ORMModel):
     subject_artists: List[StatsRankItem] = []
     songs: List[StatsRankItem] = []
     watch: StatsWatchBlock = StatsWatchBlock()
+    heat: List[StatsHeatItem] = []
 
 
 class RecapDay(ORMModel):

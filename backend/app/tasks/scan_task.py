@@ -13,6 +13,7 @@ import logging
 import threading
 
 from app.core.database import SessionLocal
+from app.services import ingest_service
 from app.services.incoming_scan_service import sync_incoming_files
 
 logger = logging.getLogger(__name__)
@@ -20,11 +21,11 @@ logger = logging.getLogger(__name__)
 _STATS_CHANGE_KEYS = ("added", "updated", "removed", "probe_failed")
 
 
-def run_scan_background() -> dict:
+def run_scan_background(force_paths: set[str] | None = None) -> dict:
     """同步执行一次扫描落库（手动触发 / 测试用）。"""
     db = SessionLocal()
     try:
-        return sync_incoming_files(db)
+        return sync_incoming_files(db, force_paths=force_paths)
     finally:
         db.close()
 
@@ -40,6 +41,13 @@ def incoming_scan_loop(interval: float, stop: threading.Event) -> None:
             db = SessionLocal()
             try:
                 stats = sync_incoming_files(db)
+                # 扫描完顺手补草稿清单（只处理没有清单 / 文件比清单新的）
+                try:
+                    made = ingest_service.generate_missing_drafts(db)
+                    if made:
+                        logger.info("入库草稿清单已生成 %s 条", made)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("生成草稿清单失败（不影响扫描）：%s", e)
             finally:
                 db.close()
             if stats.get("skipped_unmounted"):

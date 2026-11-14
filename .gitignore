@@ -118,3 +118,30 @@ idolmatrix-记忆导出-*.md
 # ===== 业主指定不上库的两张功能截图（2026-09-23）=====
 /docs/github-readme/04-shorts.png
 /docs/github-readme/05-stats.png
+
+# ===== ★ 4.0.0 出库补充（2026-11-14）：本地构建产物 / 一次性脚本 / 设计稿 =====
+# 构建与缓存产物（体积大、可重建）
+/build_dist/
+/.tmp-build/
+/frontend/.tmp-dist-new/
+/frontend/dist-mirror/
+/scripts/.cache/
+/.playwright-cli/
+
+# 一次性联调脚本与页面快照：内含内网地址、测试口令或本机绝对路径，不入库
+/tools/local_harness.py
+/scripts/im_api.py
+/scripts/_build_catalog_report.py
+/scripts/export-page-html.mjs
+/scripts/fill_group_*.py
+/backend/_*.py
+/backend/_*.json
+/backend/_*.txt
+/*.html
+
+# 设计稿与过程截图（业主口径：不入库）
+/design/
+
+# 抓取缓存 / 临时脚本（下划线前缀为一次性草稿）
+/scripts/_*
+/scripts/*cache*.json

@@ -41,6 +41,8 @@ class ExternalChannelVideo(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # 博主名归一化键（app_settings.uploader_key），与 app_settings 博主规则同键
     uploader_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    # YouTube 频道 ID（UC…）：同一频道改名后新旧 uploader_key 共用同一份快照
+    channel_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     # YouTube 视频 ID（与 MusicVideo.source_id 同口径）
     video_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(500), default="")

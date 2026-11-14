@@ -23,7 +23,8 @@ DEFAULT_CACHE_DIRNAME = "entity-img-cache"
 VIDEO_THUMB_CACHE_DIRNAME = "video-thumb-cache"
 DEFAULT_QUALITY = 92
 _MIN_W = 64
-_MAX_W = 1920
+# 满屏 hero 在 2K/4K 屏上要 2560 档（前端 imageSizes.heroImageWidth() 与之对齐）
+_MAX_W = 2560
 _MIN_Q = 40
 _MAX_Q = 100
 _CV2 = None

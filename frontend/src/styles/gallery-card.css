@@ -1,0 +1,90 @@
+/* =========================================================================
+   视频卡片（浏览页 / 组合页共用）
+   —— 从 BrowseView 的 scoped 样式抽出，保证两处列表观感一致
+   ========================================================================= */
+.gallery-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* 不再给每个视频套一圈：本体透明无边框无内距，封面直接落在页面底色上 */
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+.gc-cover {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--sa-subtle);
+  margin-bottom: 10px;
+}
+.gc-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s ease;
+}
+.gallery-card:hover .gc-img {
+  transform: scale(1.025);
+}
+.gc-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sa-text-tertiary);
+}
+.gc-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--sa-text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition: color 0.18s ease;
+}
+.gallery-card:hover .gc-title {
+  color: var(--sa-accent);
+}
+.gc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+.gc-type {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--sa-subtle);
+  border: 1px solid var(--sa-border-subtle);
+  font-size: 10.5px;
+  color: var(--sa-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gc-nums {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sa-text-tertiary);
+  white-space: nowrap;
+}
+.gc-res {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--sa-text-secondary);
+}
+.gc-dot {
+  font-size: 7px;
+  opacity: 0.55;
+}

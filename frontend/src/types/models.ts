@@ -42,9 +42,12 @@ export interface Artist extends EntityIdentity {
   social_media?: Record<string, unknown> | null
   external_links?: unknown[] | null
   description?: string | null
+  /** 一句话定位（列表卡悬停短评优先用它） */
+  tagline?: string | null
   avatar_path?: string | null
   banner_path?: string | null
-  hide_from_home?: boolean
+  /** 是否加入首页主舞台轮动（opt-in，设置页「艺人展示」勾选） */
+  featured_in_home?: boolean
   completion_pct?: number | null
   video_count?: number | null
   updated_at?: string | null
@@ -90,13 +93,16 @@ export interface Group extends EntityIdentity {
   member_count?: number | null
   avatar_path?: string | null
   banner_path?: string | null
-  hide_from_home?: boolean
+  /** 是否加入首页主舞台轮动（opt-in，设置页「艺人展示」勾选） */
+  featured_in_home?: boolean
   company_ids?: number[] | null
   completion_pct?: number | null
   // 详情接口填充
   parent_name?: string | null
   parent_uid?: string | null
   sub_units?: GroupSubUnitBrief[]
+  /** 前端图片缓存键（换海报后 URL 自动变化） */
+  updated_at?: string | null
 }
 
 export interface GroupBrief extends EntityIdentity {
@@ -160,6 +166,8 @@ export interface MembershipWithArtist extends Membership {
   artist_stage_name?: string | null
   artist_avatar_path?: string | null
   artist_uid?: string | null
+  /** 成员头像缓存键（换头像后成员格立刻更新） */
+  artist_updated_at?: string | null
 }
 
 export interface MembershipWithGroup extends Membership {
@@ -167,6 +175,9 @@ export interface MembershipWithGroup extends Membership {
   group_chinese_name?: string | null
   group_type?: string | null
   group_uid?: string | null
+  /** 艺人页「所属组合」用的组合头像与缓存键 */
+  group_avatar_path?: string | null
+  group_updated_at?: string | null
   // 母队溯源：小分队指向的顶级完整体（无上级时为空）
   root_group_name?: string | null
   root_group_chinese_name?: string | null
@@ -427,6 +438,28 @@ export type VideoType =
   | 'ShortVideo'
   | 'Other'
 
+export interface MusicVideoRelatedWork {
+  video: MusicVideoBrief
+  /** 推荐来源：同曲 / 同组合 / 同公司 / 同场活动 */
+  reason: string
+}
+
+export interface MusicVideoRelatedArtist {
+  kind: 'artist' | 'group'
+  id: number
+  uid?: string | null
+  name: string
+  chinese_name?: string | null
+  avatar_path?: string | null
+  /** 推荐来源：同组合 / 同组合成员 / 同公司 */
+  reason: string
+}
+
+export interface MusicVideoRelated {
+  works: MusicVideoRelatedWork[]
+  artists: MusicVideoRelatedArtist[]
+}
+
 export interface MusicVideoBrief extends EntityIdentity {
   id: number
   name: string
@@ -488,6 +521,10 @@ export interface MusicVideo extends MusicVideoBrief {
   group_ids?: number[] | null
   subject_artist_id?: number | null
   event_name?: string | null
+  // 机位：规范值见后端 app/core/vocab.py（CAMERA_ANGLES）；画幅由 width/height 派生
+  camera_angle?: string | null
+  // 场次「YYMMDD - 活动名」（业主 2026-10-17 口径）；不参与落位目录
+  session_label?: string | null
   is_short?: boolean | null
   is_solo?: boolean | null
   release_date?: string | null
@@ -517,6 +554,74 @@ export interface MusicVideo extends MusicVideoBrief {
   groups: GroupBrief[]
   // 翻唱原唱展示名
   cover_from?: string[]
+  /** B 站分发记录（只有详情接口回填；列表接口为 null） */
+  publish?: VideoPublish | null
+}
+
+// ===== 打歌期三维矩阵（详情页「打歌场次 & 机位切换」舱） =====
+/**
+ * 机位取值有两套：
+ * - 入库录入的**权威词表值**（`FanCam` / `FaceCam` / `Tower Cam` …，见 CAMERA_ANGLE_OPTIONS）
+ * - 没有 camera_angle 的存量条目回落到旧启发式桶（`facecam` / `landscape_fancam` …）
+ * 后端 `classify_camera` 按「有真值用真值」返回，前端两套 label 都认。
+ */
+export type StageMatrixCamera =
+  | 'facecam'
+  | 'mv'
+  | 'landscape_fancam'
+  | 'portrait_fancam'
+  | 'stage'
+  | 'onetake'
+  | 'other'
+  | (string & {})
+
+export type StageMatrixConfidence = 'high' | 'medium' | 'low'
+
+export interface StageMatrixMember {
+  kind: 'artist' | 'group'
+  id: number | null
+  uid: string | null
+  name: string
+  avatar_path?: string | null
+  /** 成员归属来源：subject_artist > video_artists > participants > group */
+  source: string
+  /** 可信度：low 时前端不跳转、灰显「待确认」 */
+  confidence: StageMatrixConfidence
+}
+
+export interface StageMatrixItem {
+  id: number
+  uid: string
+  name: string
+  duration?: number | null
+  width?: number | null
+  height?: number | null
+  orientation: 'portrait' | 'landscape' | 'unknown'
+  camera: StageMatrixCamera
+  /** 主类型（= video_types[0]）；场次与机位分栏唯一依据 */
+  video_type?: string
+  /** 原始 video_types，供前端二次归类（如面部/全景机位） */
+  video_types: string[]
+  member: StageMatrixMember
+  /** 是否为当前正在播放的视频 */
+  current: boolean
+}
+
+export interface StageMatrixDay {
+  /** 场次稳定键 = 日期 + 归一化活动名；下拉的 value 必须用它，只给日期选不中同日的第二场 */
+  key: string
+  /** 演出日（ISO 日期）；null = 未标注组 */
+  date: string | null
+  /** 本场次的活动名（一场一个活动；未标注为 null） */
+  event_name?: string | null
+  videos: StageMatrixItem[]
+}
+
+export interface StageMatrix {
+  available: boolean
+  song: { id: number; name: string; chinese_name?: string | null } | null
+  group: { id: number; uid: string; name: string; avatar_path?: string | null } | null
+  days: StageMatrixDay[]
 }
 
 // ===== 存储路径变更（详情页编辑用） =====
@@ -536,7 +641,38 @@ export interface VideoRelocateResult {
 }
 
 // ===== Playback Session（统一播放会话 /api/playback/sessions） =====
-export type PlayMode = 'direct_play' | 'direct_stream' | 'transcode'
+/**
+ * 视频在外部平台（B 站）的分发记录。
+ *
+ * 在线版（mirror）没有本地媒体文件，播放靠 `embed_url` 走 B 站 iframe。
+ * `playable` 是唯一判据：status !== 'ok'（审核中/被锁定/已删除）时必须
+ * 显示「暂不可在线观看」，不能让 iframe 指向它。
+ */
+export interface VideoPublish {
+  id: number
+  music_video_id: number
+  platform: string
+  bvid?: string | null
+  /** 分 P 索引，从 1 开始 */
+  page: number
+  /** self_upload 自己投的 / third_party 复用他人 / manual 手工粘贴 */
+  origin: 'self_upload' | 'third_party' | 'manual' | string
+  owned_by_me: boolean
+  /** ok 可播 / reviewing 审核中 / locked 被锁定 / missing 已删除 / pending 待发布 */
+  status: 'ok' | 'reviewing' | 'locked' | 'missing' | 'pending' | string
+  match_score?: number | null
+  match_note?: string | null
+  source_url?: string | null
+  submitted_at?: string | null
+  last_checked_at?: string | null
+  error?: string | null
+  /** 后端拼好的 iframe 地址；不可播时为 null */
+  embed_url?: string | null
+  watch_url?: string | null
+  playable: boolean
+}
+
+export type PlayMode = 'direct_play' | 'direct_stream' | 'transcode' | 'bilibili'
 
 export interface AudioStreamInfo {
   index: number
@@ -580,6 +716,11 @@ export interface PlaybackSession {
   subtitle_urls: SubtitleStreamInfo[]
   audio_streams: AudioStreamInfo[]
   available_qualities: string[]
+  /** 外部承载（play_mode === 'bilibili'）：非空时渲染 iframe 而不是 <video> */
+  embed_url?: string | null
+  watch_url?: string | null
+  embed_bvid?: string | null
+  embed_page?: number
 }
 
 /**
@@ -777,36 +918,6 @@ export interface IncomingInfo {
 }
 
 // ===== AI 建议 =====
-export interface AiSuggestRequest {
-  provider: string
-  base_url: string
-  api_key?: string
-  model: string
-  context: Record<string, unknown>
-  current: Record<string, unknown>
-  /** 用户手动补充的辅助识别备注（百科链接 / 归属说明等），原样并入提示词 */
-  aux_notes?: string
-}
-
-export interface AiSuggestResult {
-  original_title?: string | null
-  name?: string | null
-  chinese_name?: string | null
-  video_type?: string | null
-  video_types?: string[] | null
-  event_name?: string | null
-  performance_date?: string | null
-  subject_artist_name?: string | null
-  is_solo?: boolean | null
-  chinese_description?: string | null
-  suggested_songs?: string[] | null
-  suggested_albums?: string[] | null
-  suggested_artists?: string[] | null
-  suggested_groups?: string[] | null
-  suggested_tracks?: { song: string; albums?: string[] }[] | null
-  notice?: string | null
-}
-
 export interface AiAnalyzeMembership {
   group_name: string
   join_date?: string | null
@@ -924,15 +1035,6 @@ export interface AiSearchAlbumResult {
   sources?: AiAnalysisSource[] | null
 }
 
-export type HomeStageType = 'artist' | 'video'
-
-// PC 首页刊头（HomeMagazineHero）优先用哪种源图：
-//   'avatar' = 头像特写优先（默认，无头像才回退横幅）；
-//   'banner' = 横幅海报优先（有横幅就用横幅，无横幅才回退头像）。
-// **仅 PC 生效** —— 移动端走 HomeCinemaHero（1:1 头像盒），不读这一项。
-// 口径写在 `stores/settings.ts`（localStorage `kpml_home_hero_image`），入口在「基础设置 · 外观与显示」。
-export type HomeHeroImage = 'avatar' | 'banner'
-
 /**
  * 外观与显示（2026-09-22 起改为**跨设备同步**：存后端 app_settings.appearance）。
  * localStorage 只留作首屏缓存（防主题闪烁）与未登录兜底，hydrate 后一律以后端为准。
@@ -942,15 +1044,16 @@ export interface AppAppearanceSettings {
   theme: 'light' | 'dark' | string
   accent: 'rose' | 'blue' | string
   show_covers: boolean
-  home_hero_image: HomeHeroImage | string
+  /** 组合详情页海报压暗档位：1=轻度（默认）/ 2=中等 / 3=通透 */
+  group_hero_dim?: number
 }
 
 export interface AppHeroSettings {
   video_id?: number | null
   // 首页轮播池（第一条即主打视频）
   video_ids?: number[] | null
-  // 首页主舞台类型：artist=艺人/组合聚焦轮播；video=视频精选轮播
-  stage_type?: HomeStageType | string
+  // 首页主舞台类型：artist=艺人/组合聚焦轮播；video=视频精选轮播（旧版首页配置，前端已不再读写）
+  stage_type?: string
 }
 // 详情页主图固定头像（原 avatar/banner/test 三选一设置已移除）：
 // 逻辑见 composables/useDetailPageTheme.ts::resolveHeroKind —— 有头像用头像，
@@ -1013,7 +1116,9 @@ export interface AppUploaderRule {
   video_types: string[]
   /** YouTube 频道地址 / ID（@handle、/channel/UC… 链接或裸 UC ID） */
   youtube_channel_url: string
-  /** 是否启用缺失视频检测（针对部分博主 opt-in） */
+  /** 解析出的频道 ID（UC…），改名后按它归组 */
+  youtube_channel_id?: string
+  /** 是否启用缺失视频检测（针对部分博主 opt-in；默认关闭） */
   missing_check_enabled: boolean
 }
 
@@ -1021,10 +1126,22 @@ export interface AppUploaderRulesSettings {
   rules: AppUploaderRule[]
 }
 
+export interface AppAi2Settings {
+  enabled: boolean
+  provider: string
+  base_url: string
+  api_key: string
+  model: string
+  /** 步骤级模型覆盖，如 { verify: "deepseek-reasoner" } */
+  step_models: Record<string, string>
+  api_key_set?: boolean
+}
+
 export interface AppSettings {
   appearance: AppAppearanceSettings
   hero: AppHeroSettings
   ingest_ai: AppIngestAiSettings
+  ai2: AppAi2Settings
   mtphotos: AppMtPhotosSettings
   external_proxy: AppExternalProxySettings
   tmdb: AppTmdbSettings
@@ -1474,6 +1591,30 @@ export const VIDEO_TYPE_OPTIONS: { label: string; value: VideoType }[] = [
 
 export const VIDEO_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   VIDEO_TYPE_OPTIONS.map((o) => [o.value, o.label]),
+)
+
+/**
+ * 机位（camera_angle）选项。
+ *
+ * ⚠ 词表**唯一来源**是后端 `backend/app/core/vocab.py` 的 `CAMERA_ANGLES` / `CAMERA_LABELS`，
+ * 这里只是镜像：增删机位必须两边同改，否则入库会被后端以「词表外机位」400 拦下。
+ * 画幅（竖版/横版）不是机位，由 width/height 派生，不在此列。
+ */
+export const CAMERA_ANGLE_OPTIONS: { label: string; value: string }[] = [
+  { label: '粉丝直拍', value: 'FanCam' },
+  { label: '面部特写机位', value: 'FaceCam' },
+  { label: '全景机位', value: 'FullCam' },
+  { label: '放送机位', value: 'BroadcastCam' },
+  { label: '塔式机位', value: 'Tower Cam' },
+  { label: '编舞镜头', value: 'K-Choreo' },
+  { label: '一镜到底', value: 'OneTake' },
+  { label: '多机位', value: 'MultiCam' },
+  { label: '航拍机位', value: 'SkyCam' },
+  { label: '其他', value: '其他' },
+]
+
+export const CAMERA_ANGLE_LABEL: Record<string, string> = Object.fromEntries(
+  CAMERA_ANGLE_OPTIONS.map((o) => [o.value, o.label]),
 )
 
 /** 历史视频类型 → 现行分类：旧库里留下的细分类型归并到现行 10 类里，

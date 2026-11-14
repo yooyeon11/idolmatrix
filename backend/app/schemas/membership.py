@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import List, Optional
 
 from app.schemas.common import ORMModel
@@ -43,6 +43,8 @@ class MembershipReadWithArtist(MembershipRead):
     artist_stage_name: Optional[str] = None
     artist_avatar_path: Optional[str] = None
     artist_uid: Optional[str] = None
+    # 成员头像的缓存键：换头像后组合页的成员格要立刻更新
+    artist_updated_at: Optional[datetime] = None
 
 
 class MembershipReadWithGroup(MembershipRead):
@@ -52,6 +54,9 @@ class MembershipReadWithGroup(MembershipRead):
     group_chinese_name: Optional[str] = None
     group_type: Optional[str] = None
     group_uid: Optional[str] = None
+    # 艺人页「所属组合」：组合头像 + 缓存键（换海报后立刻更新）
+    group_avatar_path: Optional[str] = None
+    group_updated_at: Optional[datetime] = None
     # 母队溯源：该组合沿 parent_group_id 向上追踪到的顶级完整体。
     # 仅当存在上级（小分队指向母队）时填充，否则为空（等于自身）。
     root_group_name: Optional[str] = None

@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import SaHeader from '@/components/SaHeader.vue'
 import SaPagination from '@/components/SaPagination.vue'
+import SaGlassSelect from '@/components/SaGlassSelect.vue'
+import SaFilterBar from '@/components/SaFilterBar.vue'
+import SaFilterSearch from '@/components/SaFilterSearch.vue'
+import type { GlassOption } from '@/components/SaGlassSelect.vue'
 import { groupsApi } from '@/api/groups'
 import type { Group } from '@/types/models'
 import { formatDate } from '@/utils/format'
@@ -25,15 +29,29 @@ const sortOrder = ref<'default' | 'name' | '-name'>(
   (localStorage.getItem('groups:sort') as 'default' | 'name' | '-name') || 'default',
 )
 
-function toggleOnlyWithVideos() {
-  onlyWithVideos.value = !onlyWithVideos.value
-  localStorage.setItem(GROUPS_FILTER_KEY, onlyWithVideos.value ? '1' : '0')
+// 流光空间玻璃下拉的选项（值仍是原来的字符串，接口参数不变）
+const sortOptions: GlassOption[] = [
+  { label: '默认排序', value: 'default' },
+  { label: '名称 A→Z', value: 'name' },
+  { label: '名称 Z→A', value: '-name' },
+]
+const rangeOptions: GlassOption[] = [
+  { label: '仅有视频', value: 'videos', hint: '推荐' },
+  { label: '显示全部', value: 'all' },
+]
+const rangeValue = computed(() => (onlyWithVideos.value ? 'videos' : 'all'))
+function onRangeChange(v: string | number | null) {
+  const next = v === 'videos'
+  if (next === onlyWithVideos.value) return
+  onlyWithVideos.value = next
+  localStorage.setItem(GROUPS_FILTER_KEY, next ? '1' : '0')
   void load(1)
 }
-
-function onSortChange(e: Event) {
-  sortOrder.value = (e.target as HTMLSelectElement).value as 'default' | 'name' | '-name'
-  localStorage.setItem('groups:sort', sortOrder.value)
+function onSortPick(v: string | number | null) {
+  const next = (v || 'default') as 'default' | 'name' | '-name'
+  if (next === sortOrder.value) return
+  sortOrder.value = next
+  localStorage.setItem('groups:sort', next)
   void load(1)
 }
 
@@ -53,24 +71,42 @@ function initialOf(name?: string | null) {
 }
 
 function displayName(g: Group) {
-  return g.chinese_name || g.name || `#${g.id}`
+  return g.chinese_name || g.english_name || g.name || `#${g.id}`
 }
-function displaySub(g: Group) {
-  const parts: string[] = []
-  const name = g.chinese_name || g.name
-  if (g.english_name && g.english_name !== name) parts.push(g.english_name)
-  if (g.group_type) parts.push(g.group_type)
-  if (g.debut_date) {
-    const d = formatDate(g.debut_date)
-    if (d !== '--') parts.push(`${d} 出道`)
-  }
-  return parts.join(' · ')
+/** 斜体拉丁名（跟在大字下面那一行） */
+function latinOf(g: Group) {
+  const latin = g.english_name || g.korean_name || g.name || ''
+  return latin && latin !== displayName(g) ? latin : ''
 }
-function avatarSrc(g: Group) {
-  // w=256：列表卡显示尺寸约 96px，256 覆盖 2x DPR；不传 w 会直出 audiodb 抓的
-  // 高清原图（中位 400+KB/张），几十张列表页一进就拉几 MB。不带 ?t= 时间戳，
-  // 让 ETag 条件请求生效（换头像后 mtime 变，304 协商自动拿新图）。
-  return g.avatar_path ? `${groupsApi.avatarUrl(g.id)}?w=256` : ''
+function debutLabel(g: Group) {
+  if (!g.debut_date) return ''
+  const d = formatDate(g.debut_date)
+  return d === '--' ? '' : d
+}
+/** 竖幅立绘取图：头像优先（方形裁 3:4 损失小），回退横幅。
+ *  v=updated_at 作版本号：换海报后 URL 变化，不会被一年期 immutable 缓存顶住。 */
+function portraitSrc(g: Group) {
+  const v = encodeURIComponent(g.updated_at || '')
+  if (g.avatar_path) return `${groupsApi.avatarUrl(g.id)}?w=480&v=${v}`
+  if (g.banner_path) return `${groupsApi.bannerUrl(g.id)}?w=480&v=${v}`
+  return ''
+}
+const brokenCovers = ref<Set<number>>(new Set())
+function onCoverError(id: number) {
+  brokenCovers.value = new Set(brokenCovers.value).add(id)
+}
+function hasCover(g: Group) {
+  return !!portraitSrc(g) && !brokenCovers.value.has(g.id)
+}
+/** 悬停抽屉里的资料（只用列表接口已有字段） */
+function drawerFacts(g: Group) {
+  const facts: { label: string; value: string }[] = []
+  if (g.group_type) facts.push({ label: '类型', value: g.group_type })
+  if (g.origin_country) facts.push({ label: '国家', value: g.origin_country })
+  const alias = (g.aliases || []).find((x) => x && x !== displayName(g))
+  if (alias) facts.push({ label: '别名', value: alias })
+  if (g.gender_type) facts.push({ label: '性别', value: g.gender_type })
+  return facts
 }
 
 async function load(targetPage: number) {
@@ -109,66 +145,86 @@ function goGroup(g: { uid: string }) {
   router.push(groupPath(g.uid))
 }
 
-onMounted(() => load(1))
+onMounted(() => {
+  void load(1)
+})
 </script>
 
 <template>
-  <div class="mv-page">
+  <div class="gp-page">
     <SaHeader />
-    <div class="mv-container">
-      <div class="page-head">
-        <div class="page-title-wrap">
-          <h1 class="page-title">组合</h1>
-          <span class="page-count">{{ total }}</span>
+    <div class="gp-wrap">
+      <header class="gp-head">
+        <div class="gp-title-wrap">
+          <h1 class="gp-title">组合画廊</h1>
+          <span class="gp-count">{{ total }}</span>
         </div>
-        <div class="head-actions">
-          <button
-            class="filter-toggle"
-            :class="{ active: onlyWithVideos }"
-            type="button"
-            title="只显示有视频直接关联的组合（被翻唱的原唱不算）"
-            @click="toggleOnlyWithVideos"
-          >
-            {{ onlyWithVideos ? '仅有视频' : '显示全部组合' }}
-          </button>
-          <select class="sort-select" :value="sortOrder" @change="onSortChange">
-            <option value="default">默认排序</option>
-            <option value="name">姓名 A→Z</option>
-            <option value="-name">姓名 Z→A</option>
-          </select>
-          <input
-            v-model="searchInput"
-            class="search-input"
-            type="text"
-            placeholder="搜索组合名称…"
+        <SaFilterBar class="gp-actions">
+          <SaGlassSelect
+            :model-value="rangeValue"
+            :options="rangeOptions"
+            prefix="范围"
+            width="11rem"
+            aria-label="筛选范围"
+            @update:model-value="onRangeChange"
           />
-        </div>
-      </div>
+          <span class="sa-fb-sep" />
+          <SaGlassSelect
+            :model-value="sortOrder"
+            :options="sortOptions"
+            prefix="排序"
+            align="right"
+            width="12rem"
+            aria-label="排序方式"
+            @update:model-value="onSortPick"
+          />
+          <span class="sa-fb-sep" />
+          <SaFilterSearch v-model="searchInput" placeholder="组合 / 韩文…" aria-label="检索组合" />
+        </SaFilterBar>
+      </header>
 
-      <div v-if="loading && !items.length" class="list-loading">加载中…</div>
+      <div v-if="loading && !items.length" class="gp-loading">加载中…</div>
 
       <template v-else-if="items.length">
-        <div class="card-grid">
-          <button
-            v-for="g in items"
+        <!-- 与艺人画廊同构：3:4 竖幅立绘墙 -->
+        <div class="gp-gallery">
+          <article
+            v-for="(g, i) in items"
             :key="g.id"
-            class="card"
+            class="gc"
+            :style="{ animationDelay: `${i * 35}ms` }"
             @click="goGroup(g)"
           >
-            <div class="card-avatar" :style="avatarStyle(g.id)">
+            <div class="gc-frame">
               <img
-                v-if="avatarSrc(g)"
-                class="card-avatar-img"
-                :src="avatarSrc(g)"
+                v-if="hasCover(g)"
+                class="gc-img"
+                :src="portraitSrc(g)"
                 alt=""
+                loading="lazy"
+                @error="onCoverError(g.id)"
               />
-              <template v-else>{{ initialOf(displayName(g)) }}</template>
+              <div v-else class="gc-fallback" :style="avatarStyle(g.id)">
+                {{ initialOf(displayName(g)) }}
+              </div>
+              <div class="gc-shade" aria-hidden="true" />
+
+              <div class="gc-drawer">
+                <div class="gc-role">{{ g.group_type || '组合' }}</div>
+                <div class="gc-facts">
+                  <span v-for="f in drawerFacts(g)" :key="f.label" class="gc-fact">{{ f.value }}</span>
+                </div>
+              </div>
             </div>
-            <div class="card-info">
-              <div class="card-name">{{ displayName(g) }}</div>
-              <div class="card-meta">{{ displaySub(g) || '组合' }}</div>
+
+            <div class="gc-foot">
+              <div class="gc-names">
+                <h3 class="gc-name">{{ displayName(g) }}</h3>
+                <div v-if="latinOf(g)" class="gc-en">{{ latinOf(g) }}</div>
+              </div>
+              <span v-if="debutLabel(g)" class="gc-debut">{{ debutLabel(g) }}</span>
             </div>
-          </button>
+          </article>
         </div>
 
         <SaPagination
@@ -182,8 +238,8 @@ onMounted(() => load(1))
         />
       </template>
 
-      <div v-else class="empty-state">
-        <GroupOutlined :size="40" />
+      <div v-else class="gp-empty">
+        <GroupOutlined :size="36" />
         <p>没有找到组合</p>
       </div>
     </div>
@@ -191,206 +247,265 @@ onMounted(() => load(1))
 </template>
 
 <style scoped>
-.mv-page {
+.gp-page {
   min-height: 100vh;
+  background: var(--sa-bg);
+  color: var(--sa-text-primary);
 }
-.mv-container {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 0 32px 64px;
-}
-
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 36px 0 24px;
-}
-.page-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.page-title {
+.gp-wrap {
+  /* 不居中：左边缘与顶栏品牌 idolmatrix 的 i 同一竖线（任意屏宽） */
+  max-width: none;
   margin: 0;
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--sa-text-primary);
-  letter-spacing: -0.02em;
+  padding: 0 var(--sa-gutter, 36px) 72px;
 }
-/* 独立徽标样式：与标题拉开层次，避免读成“标题+数字”粘在一起 */
-.page-count {
-  font-size: 13px;
-  color: var(--sa-text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  padding: 2px 10px;
-  border-radius: 9999px;
-  background: var(--sa-subtle);
-  border: 1px solid var(--sa-border-subtle);
-  line-height: 1.6;
-}
-.head-actions {
+
+/* ===== 刊头 ===== */
+.gp-head {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px 20px;
+  padding: 30px 0 16px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+  margin-bottom: 30px;
+}
+.gp-title-wrap {
+  display: flex;
+  align-items: baseline;
   gap: 10px;
 }
-.filter-toggle {
-  padding: 8px 14px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 9999px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-tertiary);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
+.gp-title {
+  margin: 0;
+  font-family: 'Noto Serif SC', 'Songti SC', var(--sa-font-sans, sans-serif);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
-.filter-toggle:hover {
-  border-color: var(--sa-border);
-  color: var(--sa-text-secondary);
-}
-.filter-toggle.active {
-  border-color: var(--sa-accent);
-  color: var(--sa-accent);
-  background: color-mix(in srgb, var(--sa-accent) 10%, transparent);
-}
-.sort-select {
-  padding: 8px 12px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 8px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.search-input {
-  width: 240px;
-  padding: 9px 16px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 9999px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-.search-input:focus {
-  border-color: var(--sa-accent);
-}
-.search-input::placeholder {
+.gp-count {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
   color: var(--sa-text-tertiary);
 }
 
-.list-loading {
-  padding: 60px 0;
-  text-align: center;
-  color: var(--sa-text-tertiary);
-  font-size: 14px;
-}
-
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 20px;
-}
-.card {
+.gp-loading,
+.gp-empty {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 16px;
-  background: var(--sa-elevated);
-  padding: 14px;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.2s, transform 0.2s;
-}
-.card:hover {
-  border-color: var(--sa-accent);
-  transform: translateY(-2px);
-}
-.card-avatar {
-  width: 100%;
-  aspect-ratio: 1;
-  border-radius: 12px;
-  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
-  font-weight: 700;
-  color: #fff;
-  overflow: hidden;
+  gap: 10px;
+  padding: 90px 0;
+  color: var(--sa-text-tertiary);
+  font-size: 13px;
 }
-.card-avatar-img {
+
+/* ===== 画廊：与艺人页同构的 3:4 竖幅墙 ===== */
+.gp-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 26px 16px;
+}
+@media (min-width: 640px) {
+  .gp-gallery {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 30px 20px;
+  }
+}
+@media (min-width: 1024px) {
+  .gp-gallery {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 34px 24px;
+  }
+}
+@media (min-width: 1360px) {
+  .gp-gallery {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1700px) {
+  .gp-gallery {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+.gc {
+  cursor: pointer;
+  opacity: 0;
+  animation: gcReveal 0.55s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+@keyframes gcReveal {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.gc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: var(--sa-text-tertiary);
+}
+.gc-code {
+  color: var(--sa-accent);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.gc-tag {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gc-frame {
+  position: relative;
+  aspect-ratio: 3 / 4.1;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--sa-elevated);
+  border: 1px solid var(--sa-border-subtle);
+  transition:
+    transform 0.6s var(--spring, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 0.35s ease,
+    box-shadow 0.6s var(--spring, cubic-bezier(0.16, 1, 0.3, 1));
+}
+.gc:hover .gc-frame {
+  transform: translateY(-6px);
+  border-color: color-mix(in oklab, var(--sa-text-primary) 38%, transparent);
+  box-shadow: 0 26px 55px -12px rgba(0, 0, 0, 0.55);
+}
+.gc-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 0.95s cubic-bezier(0.19, 1, 0.22, 1);
 }
-.card-info {
-  margin-top: 12px;
+.gc:hover .gc-img {
+  transform: scale(1.05);
+}
+.gc-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 44px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+}
+.gc-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, transparent 52%);
+  pointer-events: none;
+}
+.gc-cams {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  color: #6ee7b7;
+}
+
+/* 悬停抽屉 */
+.gc-drawer {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 10px 12px 12px;
+  background: rgba(13, 14, 20, 0.95);
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(14px);
+  transform: translateY(101%);
+  transition: transform 0.5s cubic-bezier(0.19, 1, 0.22, 1);
+}
+.gc:hover .gc-drawer {
+  transform: translateY(0);
+}
+.gc-role {
+  margin-bottom: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: #c4b5fd;
+}
+.gc-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.gc-fact {
+  padding: 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.gc-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 2px;
+}
+.gc-names {
   min-width: 0;
 }
-.card-name {
+.gc-name {
+  margin: 0;
+  font-family: 'Noto Serif SC', 'Songti SC', 'Playfair Display', serif;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--sa-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.3s ease;
 }
-.card-meta {
-  margin-top: 4px;
-  font-size: 12px;
+.gc:hover .gc-name {
+  color: var(--sa-accent);
+}
+.gc-en {
+  margin-top: 2px;
+  font-family: 'Instrument Serif', 'Playfair Display', serif;
+  font-style: italic;
+  font-size: 12.5px;
   color: var(--sa-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 80px 0;
+.gc-debut {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9.5px;
   color: var(--sa-text-tertiary);
-}
-.empty-state p {
-  margin: 0;
-  font-size: 14px;
 }
 
 @media (max-width: 640px) {
-  .mv-container {
+  .gp-wrap {
     padding: 0 16px 48px;
   }
-  .page-head {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 12px;
-  }
-  .search-input {
-    width: 100%;
-  }
-  .card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .card {
-    padding: 10px;
-    min-width: 0;
-  }
-  .card-avatar {
-    font-size: 28px;
-  }
-  .card-name {
-    font-size: 14px;
-  }
-  .card-meta {
-    font-size: 11px;
+  .gc-frame {
+    border-radius: 16px;
   }
 }
 </style>

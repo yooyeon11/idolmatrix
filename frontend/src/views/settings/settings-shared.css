@@ -1,5 +1,35 @@
+/* =========================================================================
+   流光玻璃（Spatial Glass）——设置页统一视觉语言
+   参考 gemini-code-1792316911894：28px 圆角 + 1px 微光描边 + 内高光 inset。
+   ⚠ 刻意不用 backdrop-filter：内容区整块被模糊会让页面像蒙了一层雾，
+     改用 96% 实底来表达同一层「玻璃板」的观感。
+   ========================================================================= */
 .sa-section {
   min-height: 240px;
+  padding: 26px 28px;
+  background: color-mix(in oklab, var(--sa-elevated) 96%, transparent);
+  border: 1px solid color-mix(in oklab, var(--sa-text-primary) 9%, transparent);
+  border-radius: 28px;
+  box-shadow:
+    0 18px 50px -22px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 0 color-mix(in oklab, var(--sa-text-primary) 8%, transparent);
+}
+.sa-section + .sa-section {
+  margin-top: 22px;
+}
+/* 分区卡内部不允许再出现分区卡：拍平成普通区块，避免多层玻璃叠在一起 */
+.sa-section .sa-section {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  border-radius: 0;
+}
+@media (max-width: 768px) {
+  .sa-section {
+    padding: 18px 16px;
+    border-radius: 22px;
+  }
 }
 .section-head {
   display: flex;
@@ -7,14 +37,22 @@
   gap: 12px;
   justify-content: space-between;
   margin-bottom: 20px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--sa-border-subtle);
+  padding-bottom: 14px;
+  border-bottom: 1px solid color-mix(in oklab, var(--sa-text-primary) 9%, transparent);
 }
 .section-title {
   margin: 0;
-  font-size: 16px;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+/* 分区代号徽标（与侧栏 nav-code 同一套等宽字语言） */
+.section-tag {
+  font-family: inherit;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.02em;
 }
 /* 无标题的工具行：分区名已由左侧导航/移动端标签条给出，行内只剩控件 → 控件靠右、去掉标题用的分隔线。
    ⚠ 与 SettingsView.vue 里的同名规则是重复定义，改一处必须改两处。 */
@@ -65,14 +103,14 @@
     grid-template-columns: 1fr 1fr;
   }
 }
+/* 子卡片：与 YouTube 下载页的 .yt-block 同一配方（整站设置页只允许两层卡片） */
 .action-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 18px 20px;
   background: var(--sa-elevated);
   border: 1px solid var(--sa-border-subtle);
-  border-radius: 12px;
+  border-radius: 20px;
+  transition:
+    background-color 0.25s ease,
+    border-color 0.25s ease;
 }
 .action-clickable {
   cursor: pointer;
@@ -947,42 +985,7 @@
   width: 100%;
 }
 
-/* 开关 */
-.sa-switch {
-  display: inline-flex;
-  cursor: pointer;
-}
-.sa-switch input {
-  display: none;
-}
-.sa-switch .track {
-  width: 40px;
-  height: 22px;
-  border-radius: 9999px;
-  background: var(--sa-hover);
-  border: 1px solid var(--sa-border);
-  position: relative;
-  transition: background 0.2s, border-color 0.2s;
-  flex-shrink: 0;
-}
-.sa-switch .thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--sa-text-tertiary);
-  transition: all 0.2s;
-}
-.sa-switch input:checked + .track {
-  background: var(--sa-accent-subtle);
-  border-color: var(--sa-accent-border);
-}
-.sa-switch input:checked + .track .thumb {
-  left: 20px;
-  background: var(--sa-accent);
-}
+/* 开关样式见全局 styles/glass-switch.css（48×26 流光胶囊） */
 
 .switch-row {
   display: flex;
@@ -2532,7 +2535,7 @@
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
   gap: 16px;
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
   padding: 20px;
   align-items: start;
@@ -2760,4 +2763,95 @@
   font-size: 12px;
   color: var(--sa-text-secondary);
   line-height: 1.45;
+}
+
+/* ==========================================================================
+   统一按钮（v3.9.994）—— 设置页只允许三种视觉：
+   主按钮（强调色）/ 次按钮（描边浮起）/ 危险按钮（红描边）
+   ========================================================================== */
+.sa-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 8px;
+  border: 1px solid var(--sa-border, rgba(15, 23, 42, 0.09));
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease,
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+html[data-theme='dark'] .sa-btn {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.sa-btn:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--sa-accent) 40%, var(--sa-border, rgba(15, 23, 42, 0.09)));
+}
+.sa-btn:active:not(:disabled) {
+  transform: scale(0.975);
+}
+.sa-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sa-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 主按钮 */
+.sa-btn--primary {
+  background: var(--sa-accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow:
+    0 1px 2px rgba(4, 133, 247, 0.25),
+    0 6px 16px -8px rgba(4, 133, 247, 0.55);
+}
+.sa-btn--primary:hover:not(:disabled) {
+  border-color: transparent;
+  filter: brightness(1.06);
+}
+
+/* 危险按钮：红描边 + 红字，不填色 */
+.sa-btn--danger {
+  background: transparent;
+  border-color: color-mix(in oklab, #e11d48 30%, transparent);
+  color: #e11d48;
+  box-shadow: none;
+}
+.sa-btn--danger:hover:not(:disabled) {
+  border-color: color-mix(in oklab, #e11d48 55%, transparent);
+  background: color-mix(in oklab, #e11d48 8%, transparent);
+}
+
+/* 纯文字按钮 */
+.sa-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--sa-text-secondary);
+}
+.sa-btn--ghost:hover:not(:disabled) {
+  color: var(--sa-text-primary);
+  background: color-mix(in oklab, var(--sa-text-primary) 5%, transparent);
+}
+
+/* 图标按钮 */
+.sa-btn--icon {
+  width: 32px;
+  padding: 0;
 }

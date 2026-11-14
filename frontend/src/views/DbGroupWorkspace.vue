@@ -33,7 +33,7 @@ const uid = computed(() => String(route.params.uid || ''))
   --dh-bad: #d03050;
 }
 .mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
   padding: 14px 22px 64px;
 }

@@ -6,19 +6,23 @@ from fastapi import APIRouter, Depends
 
 from app.core.deps import require_login
 from app.api import (
-    ai,
+    ai2,
     auth,
+    api_tokens,
+    audit,
     app_settings,
     albums,
     artists,
     companies,
     company_relations,
     dashboard,
+    downloads,
     data_health,
     db_views,
     entity_locks,
     groups,
     home,
+    ingest,
     library,
     memberships,
     recycle,
@@ -32,11 +36,14 @@ from app.api import (
     system,
     uploaders,
     uploads,
+    video_publish,
 )
 
 api_router = APIRouter(prefix="/api", dependencies=[Depends(require_login)])
 api_router.include_router(auth.router)
-api_router.include_router(ai.router)
+api_router.include_router(api_tokens.router)
+api_router.include_router(audit.router)
+api_router.include_router(ai2.router)
 api_router.include_router(app_settings.router)
 api_router.include_router(artists.router)
 api_router.include_router(groups.router)
@@ -47,9 +54,12 @@ api_router.include_router(company_relations.router)
 api_router.include_router(albums.router)
 api_router.include_router(songs.router)
 api_router.include_router(music_videos.router)
+# B 站分发记录：/{mv_id}/publish（两段路径，不与 music_videos 的 /{mv_id} 冲突）
+api_router.include_router(video_publish.router)
 api_router.include_router(playback.router)
 api_router.include_router(playback.diag_router)
 api_router.include_router(library.router)
+api_router.include_router(ingest.router)
 api_router.include_router(recycle.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(stats.router)
@@ -61,4 +71,5 @@ api_router.include_router(photos.router)
 api_router.include_router(video_collections.router)
 api_router.include_router(entity_locks.router)
 api_router.include_router(data_health.router)
+api_router.include_router(downloads.router)
 api_router.include_router(db_views.router)

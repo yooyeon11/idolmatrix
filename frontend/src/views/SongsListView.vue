@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import SaGlassSelect from '@/components/SaGlassSelect.vue'
+import SaFilterBar from '@/components/SaFilterBar.vue'
+import SaFilterSearch from '@/components/SaFilterSearch.vue'
+import type { GlassOption } from '@/components/SaGlassSelect.vue'
 import SaHeader from '@/components/SaHeader.vue'
 import SaPagination from '@/components/SaPagination.vue'
 import { songsApi } from '@/api/songs'
 import type { Song } from '@/types/models'
-import { formatDuration } from '@/utils/format'
 import { songPath } from '@/utils/routes'
 import { MusicNoteOutlined } from '@/components/icons'
 
@@ -39,38 +42,28 @@ const songsSort = ref<'default' | 'videos_desc' | 'videos_asc' | 'name' | '-name
   (localStorage.getItem(SONGS_SORT_KEY) as 'default' | 'videos_desc' | 'videos_asc' | 'name' | '-name') || 'default',
 )
 
-function onSortChange(e: Event) {
-  songsSort.value = (e.target as HTMLSelectElement).value as 'default' | 'videos_desc' | 'videos_asc' | 'name' | '-name'
-  localStorage.setItem(SONGS_SORT_KEY, songsSort.value)
-  load(1)
-}
-
-const palettes: [string, string][] = [
-  ['#2a2140', '#15151b'],
-  ['#22242a', '#15151b'],
-  ['#2a2220', '#15151b'],
-  ['#1e2a2e', '#15151b'],
-  ['#241e2e', '#15151b'],
+/** 排序选项（与全站 SaGlassSelect 统一） */
+const sortOptions: GlassOption[] = [
+  { label: '默认排序', value: 'default' },
+  { label: '视频数（多→少）', value: 'videos_desc' },
+  { label: '视频数（少→多）', value: 'videos_asc' },
+  { label: '名称 A→Z', value: 'name' },
+  { label: '名称 Z→A', value: '-name' },
 ]
-function coverStyle(id: number) {
-  const [c1, c2] = palettes[id % palettes.length]
-  return { background: `linear-gradient(135deg, ${c1}, ${c2})` }
+
+function onSortPick(v: string | number | null) {
+  songsSort.value = String(v ?? 'default') as typeof songsSort.value
+  localStorage.setItem(SONGS_SORT_KEY, songsSort.value)
+  void load(1)
 }
 
 function displayName(s: Song) {
   return s.chinese_name || s.name || `#${s.id}`
 }
-function displaySub(s: Song) {
-  const names = (s.relation_names || []).filter(Boolean)
-  if (names.length) return names.join(' · ')
-  const parts: string[] = []
-  if (s.song_type) parts.push(s.song_type)
-  const d = formatDuration(s.duration)
-  if (d !== '--') parts.push(d)
-  return parts.join(' · ')
-}
-function videoLabel(s: Song) {
-  return `${s.video_count ?? 0} 个视频`
+/** 胶囊徽标：优先歌手名（关系表），没有就退回歌曲类型 */
+function artistOf(s: Song) {
+  const name = (s.relation_names || []).filter(Boolean)[0]
+  return name || s.song_type || ''
 }
 
 async function load(targetPage: number) {
@@ -121,59 +114,48 @@ onMounted(() => load(1))
           <h1 class="page-title">歌曲</h1>
           <span class="page-count">{{ total }}</span>
         </div>
-        <div class="head-actions">
+        <SaFilterBar class="head-actions">
           <button
             class="filter-toggle"
-            :class="{ active: onlyWithVideos }"
+            :class="{ 'is-on': onlyWithVideos }"
             type="button"
             title="隐藏未关联任何视频的歌曲（如批量导入尚未剪校的曲目）"
             @click="toggleOnlyWithVideos"
           >
             {{ onlyWithVideos ? '仅有关联视频' : '显示全部歌曲' }}
           </button>
-          <select
-            class="sort-select"
-            :value="songsSort"
-            @change="onSortChange"
-          >
-            <option value="default">默认排序</option>
-            <option value="videos_desc">视频数（多→少）</option>
-            <option value="videos_asc">视频数（少→多）</option>
-            <option value="name">名称 A→Z</option>
-            <option value="-name">名称 Z→A</option>
-          </select>
-          <input
-            v-model="searchInput"
-            class="search-input"
-            type="text"
-            placeholder="搜索歌曲名称…"
+          <span class="sa-fb-sep" />
+          <SaGlassSelect
+            :model-value="songsSort"
+            :options="sortOptions"
+            prefix="排序"
+            align="right"
+            width="12rem"
+            aria-label="排序方式"
+            @update:model-value="onSortPick"
           />
-        </div>
+          <span class="sa-fb-sep" />
+          <SaFilterSearch v-model="searchInput" placeholder="搜索歌曲名称…" aria-label="检索歌曲" width="176px" />
+        </SaFilterBar>
       </div>
 
       <div v-if="loading && !items.length" class="list-loading">加载中…</div>
 
       <template v-else-if="items.length">
-        <div class="card-grid">
+        <div class="capsule-grid">
           <button
             v-for="s in items"
             :key="s.id"
-            class="card"
+            class="capsule"
             @click="goSong(s)"
           >
-            <div class="card-cover" :style="coverStyle(s.id)">
-              <span class="cover-icon"><MusicNoteOutlined :size="30" /></span>
-              <span
-                v-if="s.video_count"
-                class="cover-badge"
-                :class="{ 'cover-badge--zero': !s.video_count }"
-              >
-                {{ videoLabel(s) }}
-              </span>
+            <div class="capsule-main">
+              <span v-if="artistOf(s)" class="capsule-badge">{{ artistOf(s) }}</span>
+              <h3 class="capsule-title">{{ displayName(s) }}</h3>
             </div>
-            <div class="card-info">
-              <div class="card-name">{{ displayName(s) }}</div>
-              <div class="card-meta">{{ displaySub(s) || '歌曲' }}</div>
+            <div class="capsule-count">
+              <b>{{ s.video_count ?? 0 }}</b>
+              <span>VIDEOS</span>
             </div>
           </button>
         </div>
@@ -202,9 +184,9 @@ onMounted(() => load(1))
   min-height: 100vh;
 }
 .mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px 64px;
+  padding: 0 var(--sa-gutter, 36px) 64px;
 }
 
 .page-head {
@@ -237,62 +219,27 @@ onMounted(() => load(1))
   border: 1px solid var(--sa-border-subtle);
   line-height: 1.6;
 }
-.head-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.sort-select {
-  height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 8px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-secondary);
-  font-size: 13px;
-  cursor: pointer;
-}
-.head-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+/* 开关式选项：与下拉触发器同一规格（26px / 无边框 / 悬停浅底），
+   只是语义上表示「开/关」——开启时加粗并保留浅底，不做反相胶囊。 */
 .filter-toggle {
-  padding: 8px 14px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 9999px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-tertiary);
-  font-size: 13px;
+  padding: 6px 13px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-family: inherit;
+  font-size: 12px;
   cursor: pointer;
-  transition: all 0.2s;
   white-space: nowrap;
+  transition: background-color 0.18s ease, color 0.18s ease;
 }
 .filter-toggle:hover {
-  border-color: var(--sa-border);
-  color: var(--sa-text-secondary);
-}
-.filter-toggle.active {
-  border-color: var(--sa-text-primary);
+  background: var(--sa-hover);
   color: var(--sa-text-primary);
-  background: var(--sa-elevated);
 }
-.search-input {
-  width: 240px;
-  padding: 9px 16px;
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 9999px;
-  background: var(--sa-elevated);
-  color: var(--sa-text-primary);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-.search-input:focus {
-  border-color: var(--sa-accent);
-}
-.search-input::placeholder {
-  color: var(--sa-text-tertiary);
+.filter-toggle.is-on {
+  color: var(--sa-accent);
+  font-weight: 600;
 }
 
 .list-loading {
@@ -302,76 +249,90 @@ onMounted(() => load(1))
   font-size: 14px;
 }
 
-.card-grid {
+.capsule-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
-.card {
+/* 方案 3：胶囊徽标矩阵 —— 左侧「歌手徽标 + 歌名」，右侧「数量 / VIDEOS」 */
+.capsule {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  min-width: 0; /* grid item：长歌名 nowrap 不撑破轨道 */
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 15px 20px;
   border: 1px solid var(--sa-border-subtle);
   border-radius: 16px;
   background: var(--sa-elevated);
-  padding: 14px;
+  color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.2s, transform 0.2s;
+  transition:
+    background-color 0.28s ease,
+    border-color 0.28s ease,
+    transform 0.28s var(--spring, cubic-bezier(0.16, 1, 0.3, 1)),
+    box-shadow 0.28s ease;
 }
-.card:hover {
-  border-color: var(--sa-accent);
-  transform: translateY(-2px);
+.capsule:hover {
+  background: var(--sa-hover);
+  border-color: var(--sa-accent-border);
+  transform: translateY(-3px);
+  box-shadow: 0 18px 36px -18px rgba(0, 0, 0, 0.8);
 }
-.card-cover {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 1;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(255, 255, 255, 0.85);
-  overflow: hidden;
-}
-.cover-icon {
-  display: inline-flex;
-}
-.cover-badge {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  padding: 2px 8px;
-  border-radius: 9999px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 500;
-  backdrop-filter: blur(4px);
-}
-.cover-badge--zero {
-  opacity: 0.75;
-}
-.card-info {
-  margin-top: 12px;
+.capsule-main {
+  flex: 1;
   min-width: 0;
 }
-.card-name {
+.capsule-badge {
+  display: inline-block;
+  max-width: 100%;
+  margin-bottom: 6px;
+  padding: 1px 9px;
+  border: 1px solid var(--sa-accent-border);
+  border-radius: 9999px;
+  background: var(--sa-accent-subtle);
+  color: var(--sa-accent);
+  font-size: 10px;
+  line-height: 1.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.capsule-title {
+  margin: 0;
+  /* 与博主页列表同一套字体：普惠体（继承 body），不再用 Playfair/思源宋体 */
+  font-family: inherit;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0;
   color: var(--sa-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.2s ease;
 }
-.card-meta {
-  margin-top: 4px;
-  font-size: 12px;
+.capsule:hover .capsule-title {
+  color: var(--sa-accent);
+}
+.capsule-count {
+  flex: none;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.capsule-count b {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--sa-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.capsule-count span {
+  display: block;
+  margin-top: 2px;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
   color: var(--sa-text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .empty-state {
@@ -388,6 +349,11 @@ onMounted(() => load(1))
   font-size: 14px;
 }
 
+@media (max-width: 1080px) {
+  .capsule-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 @media (max-width: 768px) {
   .mv-container {
     padding: 0 16px 48px;
@@ -400,27 +366,15 @@ onMounted(() => load(1))
   .search-input {
     width: 100%;
   }
-  .card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
+  .capsule-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
   }
-  .card {
-    padding: 10px;
-    min-width: 0;
+  .capsule {
+    padding: 13px 16px;
   }
-  .cover-icon {
-    display: none;
-  }
-  .cover-badge {
-    right: 6px;
-    bottom: 6px;
-    font-size: 10px;
-  }
-  .card-name {
-    font-size: 14px;
-  }
-  .card-meta {
-    font-size: 11px;
+  .capsule-title {
+    font-size: 15px;
   }
 }
 </style>

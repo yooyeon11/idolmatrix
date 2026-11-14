@@ -43,7 +43,7 @@ http.interceptors.response.use(
     const timedOut =
       error.code === 'ECONNABORTED' || /timeout/i.test(String(error.message || ''))
     const fallback = timedOut
-      ? `请求超时（${error.config?.timeout ?? '?'}ms）。成员详情步骤常需更久，请重试或检查网络/代理。`
+      ? `请求超时（${error.config?.timeout ?? '?'}ms）。任务可能仍在后台执行，请稍后在运行记录中查看结果。`
       : error.message || '请求失败'
     const detail = formatApiDetail(error.response?.data?.detail, fallback)
     const err = new Error(detail || fallback) as Error & {

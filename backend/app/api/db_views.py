@@ -21,6 +21,7 @@ from app.schemas.db_views import (
     AlbumListResponse,
     AlbumWorkspaceResponse,
     ArtistListResponse,
+    ShowcaseListResponse,
     SongListResponse,
     SongWorkspaceResponse,
 )
@@ -31,6 +32,7 @@ from app.services.db_views import (
     build_artist_workspace,
     build_group_rows,
     build_group_workspace,
+    build_showcase_rows,
     build_song_rows,
     build_song_workspace,
     suggest_artist_field,
@@ -58,6 +60,12 @@ def get_group_rows(db: DbDep):
 def get_artist_rows(db: DbDep):
     """艺人关系化列表：档案概要 + 所属组合 + 作品/完整度/问题数。只读。"""
     return build_artist_rows(db)
+
+
+@router.get("/showcase", response_model=ShowcaseListResponse)
+def get_showcase_rows(db: DbDep):
+    """首页轮动「艺人展示」：组合 + 艺人的海报/横幅有无与是否加入轮动。只读。"""
+    return build_showcase_rows(db)
 
 
 @router.get("/albums", response_model=AlbumListResponse)

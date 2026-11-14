@@ -401,7 +401,7 @@ export interface GroupWorkspaceResponse {
     avatar_path?: string | null
     banner_path?: string | null
     social_media?: Record<string, string> | null
-    hide_from_home?: boolean
+    featured_in_home?: boolean
     external_links: { url?: string; source?: string; [k: string]: unknown }[]
   }
   row: DbGroupRow | null
@@ -437,6 +437,26 @@ export interface GroupWorkspaceResponse {
   completeness_checklist: string[]
 }
 
+/** 首页轮动「艺人展示」：一行 = 一个组合或一个艺人 */
+export interface ShowcaseRow {
+  type: 'group' | 'artist'
+  id: number
+  uid: string
+  name: string
+  chinese_name?: string | null
+  avatar_path?: string | null
+  banner_path?: string | null
+  has_poster: boolean
+  has_banner: boolean
+  featured_in_home: boolean
+  video_count: number
+}
+
+export interface ShowcaseListResponse {
+  items: ShowcaseRow[]
+  featured_count: number
+}
+
 export const dbViewsApi = {
   getGroupRows() {
     return http.get<GroupListResponse>('/db/groups').then((r) => r.data)
@@ -449,6 +469,10 @@ export const dbViewsApi = {
   },
   getSongRows() {
     return http.get<SongListResponse>('/db/songs').then((r) => r.data)
+  },
+  /** 首页轮动「艺人展示」列表（只读；写入走 artistsApi/groupsApi.update） */
+  getShowcaseRows() {
+    return http.get<ShowcaseListResponse>('/db/showcase').then((r) => r.data)
   },
   getGroupWorkspace(uid: string) {
     return http.get<GroupWorkspaceResponse>(`/db/groups/${uid}/workspace`).then((r) => r.data)
@@ -649,7 +673,7 @@ export interface ArtistWorkspaceResponse {
     avatar_path?: string | null
     banner_path?: string | null
     social_media?: Record<string, string> | null
-    hide_from_home?: boolean
+    featured_in_home?: boolean
     external_links: { url?: string; source?: string; [k: string]: unknown }[]
   }
   memberships: {

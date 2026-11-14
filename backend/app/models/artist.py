@@ -58,8 +58,8 @@ class Artist(BaseEntityMixin, Base):
     # 手机详情顶栏横幅（相对 derived，如 banners/artists/3.jpg），与头像分裁
     banner_path: Mapped[Optional[str]] = mapped_column(String(500))
 
-    # 资料库开关：不在首页主舞台轮动展示
-    hide_from_home: Mapped[bool] = mapped_column(
+    # 首页主舞台：是否加入轮动池（opt-in，默认不参与；设置页「艺人展示」勾选）
+    featured_in_home: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("0"), nullable=False
     )
 

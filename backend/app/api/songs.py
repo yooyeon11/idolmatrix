@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.api.guards import require_active, validate_release_artist
+from app.core.audit import mark_before, mark_changes
 from app.core.deps import DbDep, PaginationDep
 from app.services.soft_delete_service import soft_delete_song
 from app.models.album import Album, AlbumTrack
@@ -516,12 +517,13 @@ def _sync_song_albums(db, song_id: int, album_ids: list[int]) -> None:
 
 
 @router.patch("/{song_id}", response_model=SongRead)
-def update_song(song_id: int, payload: SongUpdate, db: DbDep):
+def update_song(song_id: int, payload: SongUpdate, request: Request, db: DbDep):
     song = Song.get_active(db, song_id)
     if not song:
         raise HTTPException(404, "Song 不存在")
     data = payload.model_dump(exclude_unset=True)
     album_ids = data.pop("album_ids", None)
+    before = mark_before(song, data.keys())
     for k, v in data.items():
         setattr(song, k, v)
     validate_release_artist(db, song.release_artist_type, song.release_artist_id)
@@ -534,6 +536,10 @@ def update_song(song_id: int, payload: SongUpdate, db: DbDep):
         db.rollback()
         raise HTTPException(409, "专辑曲目位置冲突（并发修改），请重试") from e
     db.refresh(song)
+    changes = dict(data)
+    if album_ids is not None:
+        changes["album_ids"] = list(album_ids)
+    mark_changes(request, before, changes)
     return song
 
 

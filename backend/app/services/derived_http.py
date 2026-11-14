@@ -2,7 +2,7 @@
 
 FileResponse 自身不处理 If-None-Match / If-Modified-Since，每次请求都全量重传。
 本模块为 derived 目录图片端点补齐协商逻辑：
-- Cache-Control: public, max-age=0, must-revalidate（每次展示都重新协商，杜绝脏缓存）
+- Cache-Control: public, max-age=31536000, immutable（URL 带 ?t= 版本参数，换图即换 URL）
 - 强 ETag 由 mtime_ns + size 生成，文件被任何写方替换后必然变化
 - 命中协商条件返回 304（携带 ETag / Cache-Control / Last-Modified），不再重传正文
 """
@@ -23,7 +23,22 @@ def _http_date(st_mtime: float) -> str:
 
 # 派生图默认的缓存语义：每次展示都重新协商（杜绝脏缓存），命中协商条件返回 304。
 # 需要保持「仅私有缓存」语义的调用方（如带登录门禁的视频封面）传 cache_control 覆盖。
-DEFAULT_CACHE_CONTROL = "public, max-age=0, must-revalidate"
+IMMUTABLE_CACHE = "public, max-age=31536000, immutable"
+REVALIDATE_CACHE = "no-cache"
+DEFAULT_CACHE_CONTROL = IMMUTABLE_CACHE
+
+
+def versioned_cache_control(request: Request) -> str:
+    """头像/横幅专用：URL 带 `?t=` 或 `?v=` 才允许长期缓存，否则必须回源协商。
+
+    为什么必须这样：这些图是**原地替换**的（同一个 `/avatar` 换文件）。如果
+    URL 不变还标 `immutable`，浏览器一年都不会回来问 —— 表现就是「我换了海报，
+    列表里还是旧的」。带版本参数的 URL 天然不会撞上旧缓存，可以放心 immutable。
+    """
+    q = request.query_params
+    if (q.get("t") or "").strip() or (q.get("v") or "").strip():
+        return IMMUTABLE_CACHE
+    return REVALIDATE_CACHE
 
 
 def serve_derived_image(

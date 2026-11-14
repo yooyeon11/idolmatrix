@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, useDialog, useMessage, type SelectOption } from 'naive-ui'
+import { useDialog, useMessage } from 'naive-ui'
 import { authApi, type AuthUser } from '@/api/auth'
 import { libraryApi } from '@/api/library'
 import { photosApi } from '@/api/photos'
@@ -15,12 +15,11 @@ import type {
   SystemPaths,
 } from '@/types/models'
 import {
-  InboxOutlined,
-  RefreshOutlined,
   RobotOutlined,
+  InboxOutlined,
+  DownloadOutlined,
+  RefreshOutlined,
   FolderOutlined,
-  InfoOutlined,
-  SettingsOutlined,
   DeleteOutlined,
   PersonOutlined,
   DatabaseOutlined,
@@ -29,13 +28,13 @@ import {
   MusicNoteOutlined,
   AlbumOutlined,
   UploadOutlined,
+  LinkOutlined,
 } from '@/components/icons'
 import SaHeader from '@/components/SaHeader.vue'
-import SaSelect from '@/components/SaSelect.vue'
-import type { SaOption } from '@/components/SaSelect.vue'
 import SaOverflowTabs from '@/components/SaOverflowTabs.vue'
 import DbGroupListPanel from '@/components/db/DbGroupListPanel.vue'
 import DbGroupWorkspacePanel from '@/components/db/DbGroupWorkspacePanel.vue'
+import DbShowcasePanel from '@/components/db/DbShowcasePanel.vue'
 // 资料库其余入口（数据体检 / 艺人 / 专辑 / 歌曲 / 回收站）内嵌复用整页组件
 import DataHealthView from '@/views/DataHealthView.vue'
 import DbArtistsList from '@/views/DbArtistsList.vue'
@@ -47,10 +46,12 @@ import DbSongWorkspace from '@/views/DbSongWorkspace.vue'
 import DbRecycleView from '@/views/DbRecycleView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSettingsStore } from '@/stores/settings'
-import { useThemeStore, type ThemeAccent } from '@/stores/theme'
+import { useThemeStore } from '@/stores/theme'
 
-import SettingsAiPanel from '@/views/settings/SettingsAiPanel.vue'
 import SettingsIncomingPanel from '@/views/settings/SettingsIncomingPanel.vue'
+import SettingsDownloadsPanel from '@/views/settings/SettingsDownloadsPanel.vue'
+import SettingsAi2Panel from '@/views/settings/SettingsAi2Panel.vue'
+import SettingsApiTokensPanel from '@/views/settings/SettingsApiTokensPanel.vue'
 import SettingsUploadersPanel from '@/views/settings/SettingsUploadersPanel.vue'
 
 
@@ -66,52 +67,18 @@ function onShowCoversChange(e: Event) {
   settings.setShowCovers((e.target as HTMLInputElement).checked)
 }
 
+// 组合详情页海报压暗：1=轻度（默认）2=中等 3=通透
+const heroDimOptions = [
+  { value: '1', label: '轻度' },
+  { value: '2', label: '中等' },
+  { value: '3', label: '通透' },
+]
+
 const themeStore = useThemeStore()
 
 function onThemeModeChange(e: Event) {
   themeStore.setMode((e.target as HTMLInputElement).checked ? 'dark' : 'light')
 }
-
-// ===== 强调色：统一走选择器组件（SaSelect）=====
-// 紫色（紫罗兰）档已移除；色点靠 render-label 画在选项和已选项里。
-const ACCENT_DOTS: Record<string, string> = {
-  rose: '#e11d48',
-  blue: '#0485f7',
-}
-const accentOptions = [
-  { value: 'rose', label: '玫瑰暖调' },
-  { value: 'blue', label: '经典蓝' },
-]
-const accentModel = computed({
-  get: () => themeStore.accent as string,
-  set: (v: string) => onAccentChange(v as ThemeAccent),
-})
-
-/** 下拉 / 已选项渲染：色点 + 名称（naive 的下拉挂在 body 下，样式必须全局） */
-function renderAccentLabel(option: SelectOption) {
-  const dot = ACCENT_DOTS[String(option.value)]
-  if (!dot) return String(option.label ?? '')
-  return h('span', { class: 'sa-accent-opt' }, [
-    h('i', { class: 'sa-accent-opt__dot', style: { background: dot } }),
-    h('span', String(option.label ?? '')),
-  ])
-}
-
-function onAccentChange(a: ThemeAccent) {
-  themeStore.setAccent(a)
-}
-
-// ===== PC 首页刊头（杂志轮播）优先图 =====
-// 只影响 PC 的 `HomeMagazineHero`；移动端 `HomeCinemaHero` 是 1:1 头像盒，不读这一项。
-// 与同卡片其它项一致：改完立即生效、只落本机 localStorage（见 stores/settings.ts）。
-const HERO_IMAGE_OPTIONS: SaOption[] = [
-  { value: 'avatar', label: '头像图片' },
-  { value: 'banner', label: '横幅海报' },
-]
-const heroImageModel = computed({
-  get: () => settings.homeHeroImage as string,
-  set: (v: string) => settings.setHomeHeroImage(v === 'banner' ? 'banner' : 'avatar'),
-})
 
 // ===== 账号 =====
 async function onLogout() {
@@ -132,6 +99,9 @@ const pwdSaving = ref(false)
 
 const usernameDraft = ref(auth.user?.username || '')
 const usernameSaving = ref(false)
+const usernameOpen = ref(false)
+const pwdOpen = ref(false)
+const youtubeHintOpen = ref(false)
 watch(
   () => auth.user?.username,
   (name) => {
@@ -364,15 +334,6 @@ async function saveTmdb() {
   }
 }
 
-async function resetTmdb() {
-  try {
-    await settings.resetTmdb()
-    tmdbPingHint.value = ''
-    message.success('已恢复默认')
-  } catch (e) {
-    message.error((e as Error).message)
-  }
-}
 
 // ===== YouTube 缺失检测（博主频道缺失视频的数据源）=====
 const youtubePingLoading = ref(false)
@@ -407,29 +368,74 @@ async function saveYoutube() {
   }
 }
 
-async function resetYoutube() {
-  try {
-    await settings.resetYoutube()
-    youtubePingHint.value = ''
-    message.success('已恢复默认')
-  } catch (e) {
-    message.error((e as Error).message)
-  }
-}
 
 // ===== 侧边栏分区 =====
 const sections = [
-  { key: 'base', icon: SettingsOutlined, label: '基础设置' },
-  { key: 'incoming', icon: InboxOutlined, label: '待整理' },
-  { key: 'ai', icon: RobotOutlined, label: 'AI 设置' },
-  { key: 'db', icon: DatabaseOutlined, label: '资料库' },
-  { key: 'system', icon: InfoOutlined, label: '系统信息' },
+  { key: 'incoming', icon: InboxOutlined, label: '待整理', code: '08' },
+  { key: 'ai2', icon: RobotOutlined, label: 'AI 任务', code: '12' },
+  { key: 'tokens', icon: LinkOutlined, label: 'API 令牌', code: '13' },
+  { key: 'downloads', icon: DownloadOutlined, label: 'YouTube 下载', code: '09' },
+  { key: 'db', icon: DatabaseOutlined, label: '资料库', code: '10' },
 ]
-const activeSection = ref('incoming')
+
+const activeSection = ref('base')
+
+/** 设置分组：基础设置页里的 5 张卡，侧栏按分组做锚点跳转 */
+const configGroups = [
+  { key: 'grp-appearance', label: '外观与播放' },
+  { key: 'grp-storage', label: '存储与维护' },
+  { key: 'grp-ingest', label: '入库与抓取' },
+  { key: 'grp-account', label: '账号与安全' },
+  { key: 'grp-network', label: '集成与网络' },
+  { key: 'grp-system', label: '系统信息' },
+]
+const activeGroup = ref('grp-appearance')
+
+/** 顶部吸顶栏 + 间距，滚动落点要避开 */
+const SCROLL_OFFSET = 96
+
+async function gotoGroup(key: string) {
+  activeSection.value = 'base'
+  activeGroup.value = key
+  await nextTick()
+  const el = document.getElementById(key)
+  if (!el) return
+  const top = el.getBoundingClientRect().top + window.scrollY - SCROLL_OFFSET
+  window.scrollTo({ top, behavior: 'smooth' })
+}
+
+/** 滚动时同步高亮（IntersectionObserver，避免 scroll 事件抖动） */
+onMounted(() => {
+  const cards = configGroups
+    .map((g) => document.getElementById(g.key))
+    .filter((el): el is HTMLElement => !!el)
+  if (!cards.length) return
+  const io = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
+      if (visible.length) {
+        const id = visible[0].target.id
+        if (id) activeGroup.value = id
+      }
+    },
+    { rootMargin: '-90px 0px -55% 0px', threshold: 0 },
+  )
+  cards.forEach((c) => io.observe(c))
+})
 
 // ===== 资料库入口 =====
 // 全部条目都在设置页·资料库范围内内嵌展开，不再跳整屏独立页
-type DbEntryKey = 'dashboard' | 'groups' | 'artists' | 'albums' | 'songs' | 'uploaders' | 'recycle'
+type DbEntryKey =
+  | 'dashboard'
+  | 'groups'
+  | 'artists'
+  | 'showcase'
+  | 'albums'
+  | 'songs'
+  | 'uploaders'
+  | 'recycle'
 const dbEntries: { key: DbEntryKey; icon: Component; label: string; desc: string }[] = [
   { key: 'dashboard', icon: DashboardOutlined, label: '数据体检', desc: '全库问题扫描、健康分与修复直达' },
   { key: 'groups', icon: GroupOutlined, label: '组合', desc: '成员轨迹、公司关系与作品完整度' },
@@ -444,7 +450,7 @@ const dbEntries: { key: DbEntryKey; icon: Component; label: string; desc: string
  * 资料库分区内的子视图（全部内嵌，不离开设置页）：
  * home = 入口卡；dashboard = 数据体检；groups/group = 组合列表 / 工作台；
  * artists/artist、albums/album、songs/song = 各自列表 / 工作台；
- * uploaders = 博主管理；recycle = 回收站
+ * showcase = 艺人展示（首页轮动勾选）；uploaders = 博主管理；recycle = 回收站
  */
 type DbView =
   | 'home'
@@ -453,6 +459,7 @@ type DbView =
   | 'group'
   | 'artists'
   | 'artist'
+  | 'showcase'
   | 'albums'
   | 'album'
   | 'songs'
@@ -687,6 +694,8 @@ onMounted(() => {
   }
 })
 </script>
+
+<style src="../styles/settings-ref.css"></style>
 <template>
   <div class="sa-settings">
     <!-- 顶栏 -->
@@ -709,6 +718,19 @@ onMounted(() => {
           </div>
 
           <nav class="settings-nav" aria-label="设置分区">
+            <div class="nav-cap">Config</div>
+            <button
+              v-for="(g, i) in configGroups"
+              :key="g.key"
+              class="nav-item"
+              :class="{ 'nav-item--active': activeSection === 'base' && activeGroup === g.key }"
+              @click="gotoGroup(g.key)"
+            >
+              <span class="nav-label">{{ g.label }}</span>
+              <span class="nav-code">{{ String(i + 1).padStart(2, '0') }}</span>
+            </button>
+
+            <div class="nav-cap nav-cap--sub">Workspace</div>
             <button
               v-for="s in sections"
               :key="s.key"
@@ -716,21 +738,21 @@ onMounted(() => {
               :class="{ 'nav-item--active': activeSection === s.key }"
               @click="activeSection = s.key"
             >
-              <component :is="s.icon" :size="16" />
-              <span>{{ s.label }}</span>
+              <span class="nav-label">{{ s.label }}</span>
+              <span class="nav-code">{{ s.code }}</span>
             </button>
           </nav>
 
           <div class="settings-content">
             <!-- 分区一：基础设置 -->
             <!-- 左侧导航/移动端标签条已经标明当前分区，内容区不再重复标题行 -->
-            <section v-if="activeSection === 'base'" class="sa-section base-panel">
-              <!-- ===================== 大区：外观与内容 ===================== -->
-              <div class="panel-group-title">外观</div>
+            <!-- 设置分组：两列画廊，全部配置一屏可见 -->
+            <div v-if="activeSection === 'base'" class="settings-gallery">
+            <section class="sa-section" id="grp-appearance">
+              <div class="panel-group-title">外观与播放</div>
 
               <div class="panel">
-                <div class="panel-subtitle">外观与显示</div>
-                <div class="panel-grid">
+                                <div class="panel-grid">
                   <div class="field field--wide">
                     <div class="field-row">
                       <span class="field-label">深色主题</span>
@@ -743,17 +765,6 @@ onMounted(() => {
                         <span class="track"><span class="thumb" /></span>
                       </label>
                     </div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">强调色</span>
-                    </div>
-                    <SaSelect
-                      v-model="accentModel"
-                      :options="accentOptions"
-                      :clearable="false"
-                      :render-label="renderAccentLabel"
-                    />
                   </div>
                   <div class="field field--wide">
                     <div class="field-row">
@@ -771,15 +782,17 @@ onMounted(() => {
                   </div>
                   <div class="field field--wide">
                     <div class="field-row">
-                      <span class="field-label">首页轮播优先图</span>
+                      <span class="field-label">组合页海报压暗</span>
                     </div>
-                    <SaSelect
-                      v-model="heroImageModel"
-                      :options="HERO_IMAGE_OPTIONS"
-                      :clearable="false"
+                    <SaRadioGroup
+                      :model-value="String(settings.groupHeroDim)"
+                      :options="heroDimOptions"
+                      name="group-hero-dim"
+                      orientation="horizontal"
+                      @update:model-value="settings.setGroupHeroDim(Number($event))"
                     />
                     <div class="field-hint">
-                      仅 PC 端刊头：选「横幅海报」时有横幅的优先用横幅，没有横幅的仍回退头像；移动端不受影响
+                      只影响组合详情页首屏：越靠右海报越通透，左侧标题区随之变亮
                     </div>
                   </div>
                 </div>
@@ -790,230 +803,13 @@ onMounted(() => {
 
               <!-- 「内容与匹配」整栏已移除：自动关联策略固定严格（无设置入口），详情页主图固定头像 -->
 
-              <!-- ===================== 大区：网络与服务 ===================== -->
-              <div class="panel-group-title">网络与服务</div>
+                          </section>
 
-              <div class="panel">
-                <div class="panel-subtitle">网络与代理</div>
-                <div class="panel-grid">
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">外部站点走代理</span>
-                      <label class="sa-switch">
-                        <input v-model="settings.externalProxy.enabled" type="checkbox" />
-                        <span class="track"><span class="thumb" /></span>
-                      </label>
-                    </div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">代理地址</span>
-                    </div>
-                    <input
-                      v-model="settings.externalProxy.url"
-                      class="sa-input"
-                      type="text"
-                      placeholder="http://192.168.1.10:7890"
-                    />
-                  </div>
-                </div>
-                <div class="panel-foot">
-                  <div class="panel-actions">
-                    <n-button size="small" quaternary :disabled="proxySaving" @click="resetProxySettings">
-                      恢复默认
-                    </n-button>
-                    <n-button size="small" type="primary" :loading="proxySaving" @click="saveProxySettings">
-                      保存
-                    </n-button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="panel">
-                <div class="panel-subtitle">MT Photos 照片墙</div>
-                <div class="panel-grid">
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">启用</span>
-                      <label class="sa-switch">
-                        <input v-model="settings.mtphotos.enabled" type="checkbox" />
-                        <span class="track"><span class="thumb" /></span>
-                      </label>
-                    </div>
-                    <div class="field-hint">启用后照片墙可绑定 MT；成帖需容器能读到导出目录的 txt</div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">服务地址</span>
-                    </div>
-                    <input
-                      v-model="settings.mtphotos.base_url"
-                      class="sa-input"
-                      type="text"
-                      placeholder="http://192.168.1.10:8063"
-                    />
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">API Key</span>
-                    </div>
-                    <input
-                      v-model="settings.mtphotos.api_key"
-                      class="sa-input"
-                      type="password"
-                      :placeholder="settings.mtphotos.api_key_set ? '已保存，留空则不修改' : 'sk_live_...'"
-                      autocomplete="off"
-                    />
-                    <div class="field-hint">MT 网页右上角用户名 → API 密钥里创建；授权码后端自动续期</div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">MT 磁盘路径前缀</span>
-                    </div>
-                    <input
-                      v-model="settings.mtphotos.disk_prefix"
-                      class="sa-input"
-                      type="text"
-                      placeholder="如 /volume1/photo 或 Y:\photo（MT 里显示的路径开头）"
-                    />
-                    <div class="field-hint">填 MT 容器内路径，不是 NAS 宿主机路径（例：/photo）</div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">容器内挂载路径</span>
-                    </div>
-                    <input
-                      v-model="settings.mtphotos.mount_path"
-                      class="sa-input"
-                      type="text"
-                      placeholder="/data/mt-photos"
-                    />
-                    <div class="field-hint">与 compose 里 MT_PHOTOS_DIR 的容器路径一致</div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="hero-text-actions">
-                      <n-button size="small" quaternary :loading="mtPingLoading" @click="pingMtphotos">
-                        测试连接
-                      </n-button>
-                      <button
-                        class="sa-btn sa-btn--icon"
-                        type="button"
-                        title="恢复默认"
-                        aria-label="恢复默认"
-                        @click="resetMtphotos"
-                      >
-                        <RefreshOutlined :size="15" />
-                      </button>
-                      <n-button size="small" type="primary" @click="saveMtphotos">保存</n-button>
-                    </div>
-                    <div v-if="mtPingHint" class="field-hint">{{ mtPingHint }}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="panel">
-                <div class="panel-subtitle">TMDB 艺人资料源</div>
-                <div class="panel-grid">
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">启用</span>
-                      <label class="sa-switch">
-                        <input v-model="settings.tmdb.enabled" type="checkbox" />
-                        <span class="track"><span class="thumb" /></span>
-                      </label>
-                    </div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">API Key</span>
-                    </div>
-                    <input
-                      v-model="settings.tmdb.api_key"
-                      class="sa-input"
-                      type="password"
-                      :placeholder="settings.tmdb.api_key_set ? '已保存，留空则不修改' : '32 位十六进制（v3 key）'"
-                      autocomplete="off"
-                    />
-                  </div>
-                  <div class="field field--wide">
-                    <div class="hero-text-actions">
-                      <n-button size="small" quaternary :loading="tmdbPingLoading" @click="pingTmdb">
-                        测试连接
-                      </n-button>
-                      <button
-                        class="sa-btn sa-btn--icon"
-                        type="button"
-                        title="恢复默认"
-                        aria-label="恢复默认"
-                        @click="resetTmdb"
-                      >
-                        <RefreshOutlined :size="15" />
-                      </button>
-                      <n-button size="small" type="primary" @click="saveTmdb">保存</n-button>
-                    </div>
-                    <div v-if="tmdbPingHint" class="field-hint">{{ tmdbPingHint }}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="panel">
-                <div class="panel-subtitle">YouTube 缺失检测</div>
-                <div class="panel-grid">
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">启用</span>
-                      <label class="sa-switch">
-                        <input v-model="settings.youtube.enabled" type="checkbox" />
-                        <span class="track"><span class="thumb" /></span>
-                      </label>
-                    </div>
-                    <div class="field-hint">
-                      YouTube Data API v3 密钥，用于拉取博主频道完整投稿列表。申请：
-                      Google Cloud Console → 启用 YouTube Data API v3 → 创建 API Key（默认每日 1 万 quota）。
-                      填好后还需到「资料库 · 博主管理」给博主填频道地址并勾选「缺失检测」，博主页才会出现缺失区块；
-                      出网走上方「网络与代理」。
-                    </div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="field-row">
-                      <span class="field-label">API Key</span>
-                    </div>
-                    <input
-                      v-model="settings.youtube.api_key"
-                      class="sa-input"
-                      type="password"
-                      :placeholder="settings.youtube.api_key_set ? '已保存，留空则不修改' : 'Google Cloud Console 申请（YouTube Data API v3）'"
-                      autocomplete="off"
-                    />
-                    <div class="field-hint">免费申请，默认每日 1 万 quota，够检测数千次</div>
-                  </div>
-                  <div class="field field--wide">
-                    <div class="hero-text-actions">
-                      <n-button size="small" quaternary :loading="youtubePingLoading" @click="pingYoutube">
-                        测试连接
-                      </n-button>
-                      <button
-                        class="sa-btn sa-btn--icon"
-                        type="button"
-                        title="恢复默认"
-                        aria-label="恢复默认"
-                        @click="resetYoutube"
-                      >
-                        <RefreshOutlined :size="15" />
-                      </button>
-                      <n-button size="small" type="primary" @click="saveYoutube">保存</n-button>
-                    </div>
-                    <div v-if="youtubePingHint" class="field-hint">{{ youtubePingHint }}</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- ===================== 大区：存储与维护 ===================== -->
+            <section class="sa-section" id="grp-storage">
               <div class="panel-group-title">存储与维护</div>
 
               <div class="panel">
-                <div class="panel-subtitle">存储与维护</div>
-                <div class="panel-grid">
+                                <div class="panel-grid">
                   <div class="field field--wide">
                     <div class="field-row">
                       <span class="field-label">转码缓存</span>
@@ -1084,90 +880,174 @@ onMounted(() => {
               </div>
 
               <!-- ===================== 大区：账号 ===================== -->
-              <div class="panel-group-title">账号</div>
+                          </section>
 
+            <section class="sa-section" id="grp-ingest">
+              <div class="panel-group-title">入库与抓取</div>
               <div class="panel">
-                <div class="panel-subtitle">账号安全</div>
+                <div class="panel-subtitle">TMDB 艺人资料源</div>
                 <div class="panel-grid">
                   <div class="field field--wide">
                     <div class="field-row">
-                      <span class="field-label">当前用户</span>
-                      <span class="account-name">{{ auth.user?.username || '—' }}</span>
+                      <span class="field-label">启用</span>
+                      <label class="sa-switch">
+                        <input v-model="settings.tmdb.enabled" type="checkbox" />
+                        <span class="track"><span class="thumb" /></span>
+                      </label>
                     </div>
-                    <div class="field-hint">账号操作已统一收拢到设置页，各端一致</div>
                   </div>
                   <div class="field field--wide">
                     <div class="field-row">
-                      <span class="field-label">修改用户名</span>
+                      <span class="field-label">API Key</span>
                     </div>
                     <input
-                      v-model="usernameDraft"
+                      v-model="settings.tmdb.api_key"
                       class="sa-input"
-                      type="text"
-                      autocomplete="username"
-                      placeholder="3–32 位字母、数字、点、下划线或短横"
+                      type="password"
+                      :placeholder="settings.tmdb.api_key_set ? '已保存，留空则不修改' : '32 位十六进制（v3 key）'"
+                      autocomplete="off"
                     />
-                    <div class="field-hint">登录用的用户名，须以字母或数字开头</div>
                   </div>
                   <div class="field field--wide">
                     <div class="hero-text-actions">
-                      <n-button
-                        size="small"
-                        type="primary"
-                        :disabled="usernameSaving"
-                        @click="onChangeUsername"
-                      >
-                        {{ usernameSaving ? '保存中…' : '保存用户名' }}
-                      </n-button>
+                      <button class="sa-btn" type="button" :disabled="tmdbPingLoading" @click="pingTmdb">
+                        测试连接
+                      </button>
+                      <button class="sa-btn sa-btn--primary" type="button" @click="saveTmdb">保存</button>
+                    </div>
+                    <div v-if="tmdbPingHint" class="field-hint">{{ tmdbPingHint }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-subtitle">YouTube 缺失检测</div>
+                <div class="panel-grid">
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">启用</span>
+                      <label class="sa-switch">
+                        <input v-model="settings.youtube.enabled" type="checkbox" />
+                        <span class="track"><span class="thumb" /></span>
+                      </label>
+                    </div>
+                    <button class="hint-toggle" type="button" @click="youtubeHintOpen = !youtubeHintOpen">
+                      {{ youtubeHintOpen ? '收起说明' : '说明' }}
+                    </button>
+                    <div v-if="youtubeHintOpen" class="field-hint">
+                      YouTube Data API v3 密钥，用于拉取博主频道完整投稿列表。申请：
+                      Google Cloud Console → 启用 YouTube Data API v3 → 创建 API Key（默认每日 1 万 quota）。
+                      填好后还需到「资料库 · 博主管理」给博主填频道地址并勾选「缺失检测」，博主页才会出现缺失区块；
+                      出网走上方「网络与代理」。
                     </div>
                   </div>
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">API Key</span>
+                    </div>
+                    <input
+                      v-model="settings.youtube.api_key"
+                      class="sa-input"
+                      type="password"
+                      :placeholder="settings.youtube.api_key_set ? '已保存，留空则不修改' : 'Google Cloud Console 申请（YouTube Data API v3）'"
+                      autocomplete="off"
+                    />
+                    <div class="field-hint">免费申请，默认每日 1 万 quota，够检测数千次</div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="hero-text-actions">
+                      <button class="sa-btn" type="button" :disabled="youtubePingLoading" @click="pingYoutube">
+                        测试连接
+                      </button>
+                      <button class="sa-btn sa-btn--primary" type="button" @click="saveYoutube">保存</button>
+                    </div>
+                    <div v-if="youtubePingHint" class="field-hint">{{ youtubePingHint }}</div>
+                  </div>
                 </div>
+              </div>
 
-                <!-- 修改密码 -->
-                <div class="panel-grid pwd-grid">
-                  <div class="field">
-                    <span class="field-label">当前密码</span>
-                    <input
-                      v-model="pwdOld"
-                      class="sa-input"
-                      type="password"
-                      autocomplete="current-password"
-                      placeholder="输入当前密码"
-                    />
+              <!-- ===================== 大区：存储与维护 ===================== -->
+                          </section>
+
+            <section class="sa-section" id="grp-account">
+              <div class="panel-group-title">账号与安全</div>
+
+              <div class="panel">
+                <div class="panel-subtitle">账号</div>
+                <div class="account-row">
+                  <div class="account-id">
+                    <span class="account-avatar">{{ (auth.user?.username || '—').slice(0, 1).toUpperCase() }}</span>
+                    <div>
+                      <div class="account-name">{{ auth.user?.username || '—' }}</div>
+                      <div class="field-hint">登录账号 · 修改后其他设备需重新登录</div>
+                    </div>
                   </div>
-                  <div class="field">
-                    <span class="field-label">新密码（8–128 位）</span>
-                    <input
-                      v-model="pwdNew"
-                      class="sa-input"
-                      type="password"
-                      autocomplete="new-password"
-                      placeholder="输入新密码"
-                    />
-                  </div>
-                  <div class="field">
-                    <span class="field-label">确认新密码</span>
-                    <input
-                      v-model="pwdConfirm"
-                      class="sa-input"
-                      type="password"
-                      autocomplete="new-password"
-                      placeholder="再次输入新密码"
-                    />
-                    <div class="field-hint">修改后其他设备将退出登录，当前设备保持登录</div>
-                  </div>
-                </div>
-                <div class="pwd-actions">
                   <button
-                    class="sa-btn sa-btn--primary"
+                    v-if="!usernameOpen"
+                    class="sa-btn"
                     type="button"
-                    :disabled="pwdSaving"
-                    @click="onChangePassword"
+                    @click="usernameOpen = true"
                   >
-                    {{ pwdSaving ? '保存中…' : '修改密码' }}
+                    修改用户名
                   </button>
                 </div>
 
+                <div v-if="usernameOpen" class="account-form">
+                  <input
+                    v-model="usernameDraft"
+                    class="sa-input"
+                    type="text"
+                    autocomplete="username"
+                    placeholder="3–32 位字母、数字、点、下划线或短横"
+                  />
+                  <div class="field-hint">须以字母或数字开头</div>
+                  <div class="panel-actions">
+                    <button class="sa-btn" type="button" @click="usernameOpen = false">取消</button>
+                    <button
+                      class="sa-btn sa-btn--primary"
+                      type="button"
+                      :disabled="usernameSaving"
+                      @click="onChangeUsername"
+                    >
+                      {{ usernameSaving ? '保存中…' : '保存' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-subtitle">密码</div>
+                <div v-if="!pwdOpen" class="account-row">
+                  <div class="field-hint">修改后其他设备将退出登录，当前设备保持登录</div>
+                  <button class="sa-btn" type="button" @click="pwdOpen = true">修改密码</button>
+                </div>
+
+                <div v-else class="account-form">
+                  <div class="panel-grid pwd-grid">
+                    <div class="field">
+                      <span class="field-label">当前密码</span>
+                      <input v-model="pwdOld" class="sa-input" type="password" autocomplete="current-password" placeholder="输入当前密码" />
+                    </div>
+                    <div class="field">
+                      <span class="field-label">新密码（8–128 位）</span>
+                      <input v-model="pwdNew" class="sa-input" type="password" autocomplete="new-password" placeholder="输入新密码" />
+                    </div>
+                    <div class="field">
+                      <span class="field-label">确认新密码</span>
+                      <input v-model="pwdConfirm" class="sa-input" type="password" autocomplete="new-password" placeholder="再次输入新密码" />
+                    </div>
+                  </div>
+                  <div class="panel-actions">
+                    <button class="sa-btn" type="button" @click="pwdOpen = false">取消</button>
+                    <button class="sa-btn sa-btn--primary" type="button" :disabled="pwdSaving" @click="onChangePassword">
+                      {{ pwdSaving ? '保存中…' : '保存' }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-subtitle">会话</div>
                 <div class="panel-foot">
                   <div class="panel-note">
                     <PersonOutlined :size="13" />
@@ -1179,9 +1059,12 @@ onMounted(() => {
                   </div>
                 </div>
               </div>
+            </section>
 
-              <div v-if="isOwner" class="panel">
-                <div class="panel-subtitle">测试账号</div>
+
+            <section v-if="isOwner" class="sa-section" id="grp-tests">
+              <div class="panel-group-title">测试账号</div>
+              <div class="panel">
                 <div class="panel-grid">
                   <div class="field field--wide">
                     <div class="field-hint">给 AI 自动任务单独登录用，与主账号隔离</div>
@@ -1237,135 +1120,133 @@ onMounted(() => {
                 </div>
               </div>
             </section>
+            <section class="sa-section" id="grp-network">
+              <div class="panel-group-title">集成与网络</div>
 
-
-            <SettingsIncomingPanel v-else-if="activeSection === 'incoming'" @goto-ai="activeSection = 'ai'" />
-
-            <SettingsAiPanel v-else-if="activeSection === 'ai'" />
-
-            <!-- 分区：资料库 -->
-            <section v-else-if="activeSection === 'db'" class="sa-section">
-              <!-- 关系化数据管理：入口（全部内嵌进设置页，不再跳整屏独立页） -->
-              <div v-if="dbView === 'home'" class="panel">
-                <div class="panel-subtitle">关系化数据管理</div>
-                <div class="db-entry-grid">
-                  <button
-                    v-for="e in dbEntries"
-                    :key="e.key"
-                    type="button"
-                    class="db-entry"
-                    @click="dbView = e.key"
-                  >
-                    <span class="db-entry-icon"><component :is="e.icon" :size="18" /></span>
-                    <span class="db-entry-main">
-                      <span class="db-entry-name">{{ e.label }}</span>
-                      <span class="db-entry-desc">{{ e.desc }}</span>
-                    </span>
-                    <span class="db-entry-go">→</span>
-                  </button>
+              <div class="panel">
+                <div class="panel-subtitle">网络与代理</div>
+                <div class="panel-grid">
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">外部站点走代理</span>
+                      <label class="sa-switch">
+                        <input v-model="settings.externalProxy.enabled" type="checkbox" />
+                        <span class="track"><span class="thumb" /></span>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">代理地址</span>
+                    </div>
+                    <input
+                      v-model="settings.externalProxy.url"
+                      class="sa-input"
+                      type="text"
+                      placeholder="http://192.168.1.10:7890"
+                    />
+                  </div>
                 </div>
-                <div class="field-hint">
-                  资料库负责组合 / 艺人 / 专辑 / 歌曲的关系型元数据维护：体检问题归因到实体、完整度逐行可见、改动实时保存。
+                <div class="panel-foot">
+                  <div class="panel-actions">
+                    <button class="sa-btn" type="button" :disabled="proxySaving" @click="resetProxySettings">
+                      恢复默认
+                    </button>
+                    <button class="sa-btn sa-btn--primary" type="button" :disabled="proxySaving" @click="saveProxySettings">
+                      保存
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <!-- 数据体检（内嵌） -->
-              <div v-else-if="dbView === 'dashboard'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
-                  数据体检
+              <div class="panel">
+                <div class="panel-subtitle">MT Photos 照片墙</div>
+                <div class="panel-grid">
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">启用</span>
+                      <label class="sa-switch">
+                        <input v-model="settings.mtphotos.enabled" type="checkbox" />
+                        <span class="track"><span class="thumb" /></span>
+                      </label>
+                    </div>
+                    <div class="field-hint">启用后照片墙可绑定 MT；成帖需容器能读到导出目录的 txt</div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">服务地址</span>
+                    </div>
+                    <input
+                      v-model="settings.mtphotos.base_url"
+                      class="sa-input"
+                      type="text"
+                      placeholder="http://192.168.1.10:8063"
+                    />
+                  </div>
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">API Key</span>
+                    </div>
+                    <input
+                      v-model="settings.mtphotos.api_key"
+                      class="sa-input"
+                      type="password"
+                      :placeholder="settings.mtphotos.api_key_set ? '已保存，留空则不修改' : 'sk_live_...'"
+                      autocomplete="off"
+                    />
+                    <div class="field-hint">MT 网页右上角用户名 → API 密钥里创建；授权码后端自动续期</div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">MT 磁盘路径前缀</span>
+                    </div>
+                    <input
+                      v-model="settings.mtphotos.disk_prefix"
+                      class="sa-input"
+                      type="text"
+                      placeholder="如 /volume1/photo 或 Y:\photo（MT 里显示的路径开头）"
+                    />
+                    <div class="field-hint">填 MT 容器内路径，不是 NAS 宿主机路径（例：/photo）</div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="field-row">
+                      <span class="field-label">容器内挂载路径</span>
+                    </div>
+                    <input
+                      v-model="settings.mtphotos.mount_path"
+                      class="sa-input"
+                      type="text"
+                      placeholder="/data/mt-photos"
+                    />
+                    <div class="field-hint">与 compose 里 MT_PHOTOS_DIR 的容器路径一致</div>
+                  </div>
+                  <div class="field field--wide">
+                    <div class="hero-text-actions">
+                      <button class="sa-btn" type="button" :disabled="mtPingLoading" @click="pingMtphotos">
+                        测试连接
+                      </button>
+                      <button
+                        class="sa-btn sa-btn--icon"
+                        type="button"
+                        title="恢复默认"
+                        aria-label="恢复默认"
+                        @click="resetMtphotos"
+                      >
+                        <RefreshOutlined :size="15" />
+                      </button>
+                      <button class="sa-btn sa-btn--primary" type="button" @click="saveMtphotos">保存</button>
+                    </div>
+                    <div v-if="mtPingHint" class="field-hint">{{ mtPingHint }}</div>
+                  </div>
                 </div>
-                <DataHealthView embedded @open="openDbPath" />
               </div>
 
-              <!-- 组合列表 / 工作台（内嵌） -->
-              <div v-else-if="dbView === 'group'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'groups'">← 返回列表</button>
-                  组合工作台
-                </div>
-                <DbGroupWorkspacePanel :uid="dbEmbedUid" />
-              </div>
-              <div v-else-if="dbView === 'groups'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
-                  组合
-                </div>
-                <DbGroupListPanel
-                  @open="openDbGroup"
-                  @created="openDbGroup"
-                />
-              </div>
+                            </section>
 
-              <!-- 艺人列表 / 工作台（内嵌） -->
-              <div v-else-if="dbView === 'artist'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'artists'">← 返回列表</button>
-                  艺人工作台
-                </div>
-                <DbArtistWorkspace :uid="dbEmbedUid" embedded />
-              </div>
-              <div v-else-if="dbView === 'artists'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
-                  艺人
-                </div>
-                <DbArtistsList embedded @open="openDbPath" />
-              </div>
 
-              <!-- 专辑列表 / 工作台（内嵌） -->
-              <div v-else-if="dbView === 'album'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'albums'">← 返回列表</button>
-                  专辑工作台
-                </div>
-                <DbAlbumWorkspace :uid="dbEmbedUid" embedded />
-              </div>
-              <div v-else-if="dbView === 'albums'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
-                  专辑
-                </div>
-                <DbAlbumsList embedded @open="openDbPath" />
-              </div>
+            <section id="grp-system" class="sa-section sa-section--wide">
+              <div class="panel-group-title">系统信息</div>
 
-              <!-- 歌曲列表 / 工作台（内嵌） -->
-              <div v-else-if="dbView === 'song'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'songs'">← 返回列表</button>
-                  歌曲工作台
-                </div>
-                <DbSongWorkspace :uid="dbEmbedUid" embedded />
-              </div>
-              <div v-else-if="dbView === 'songs'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
-                  歌曲
-                </div>
-                <DbSongsList embedded @open="openDbPath" />
-              </div>
-
-              <!-- 博主管理（内嵌） -->
-              <div v-else-if="dbView === 'uploaders'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
-                  博主管理
-                </div>
-                <SettingsUploadersPanel />
-              </div>
-
-              <!-- 回收站（内嵌） -->
-              <div v-else-if="dbView === 'recycle'" class="panel db-embed-panel">
-                <div class="panel-subtitle db-embed-head">
-                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
-                  回收站
-                </div>
-                <DbRecycleView embedded />
-              </div>
-            </section>
-
-            <!-- 分区三：系统信息 -->
-            <section v-else-if="activeSection === 'system'" class="sa-section">
               <!-- 标题行去掉，只留刷新按钮（右对齐工具行） -->
               <div class="section-head section-head--tools">
                 <button
@@ -1412,7 +1293,148 @@ onMounted(() => {
                   </div>
                 </div>
               </div>
+                        </section>
+</div>
+
+
+            <SettingsIncomingPanel v-else-if="activeSection === 'incoming'" />
+          <SettingsDownloadsPanel v-else-if="activeSection === 'downloads'" />
+          <SettingsAi2Panel v-else-if="activeSection === 'ai2'" />
+          <SettingsApiTokensPanel v-else-if="activeSection === 'tokens'" />
+
+
+            <!-- 分区：资料库 -->
+            <section v-else-if="activeSection === 'db'" class="sa-section">
+              <!-- 关系化数据管理：入口（全部内嵌进设置页，不再跳整屏独立页） -->
+              <div v-if="dbView === 'home'" class="panel">
+                <div class="panel-subtitle">关系化数据管理</div>
+                <div class="db-entry-grid">
+                  <button
+                    v-for="e in dbEntries"
+                    :key="e.key"
+                    type="button"
+                    class="db-entry"
+                    @click="dbView = e.key"
+                  >
+                    <span class="db-entry-icon"><component :is="e.icon" :size="18" /></span>
+                    <span class="db-entry-main">
+                      <span class="db-entry-name">{{ e.label }}</span>
+                      <span class="db-entry-desc">{{ e.desc }}</span>
+                    </span>
+                    <span class="db-entry-go">→</span>
+                  </button>
+                </div>
+                <div class="field-hint">
+                  资料库负责组合 / 艺人 / 专辑 / 歌曲的关系型元数据维护：体检问题归因到实体、完整度逐行可见、改动实时保存。
+                </div>
+              </div>
+
+              <!-- 数据体检（内嵌） -->
+              <div v-else-if="dbView === 'dashboard'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  数据体检
+                </div>
+                <DataHealthView embedded @open="openDbPath" />
+              </div>
+
+              <!-- 组合列表 / 工作台（内嵌） -->
+              <div v-else-if="dbView === 'group'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'groups'">← 返回列表</button>
+                  组合工作台
+                </div>
+                <DbGroupWorkspacePanel :uid="dbEmbedUid" />
+              </div>
+              <div v-else-if="dbView === 'groups'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  组合
+                </div>
+                <DbGroupListPanel
+                  @open="openDbGroup"
+                  @created="openDbGroup"
+                />
+              </div>
+
+              <!-- 艺人列表 / 工作台（内嵌） -->
+              <div v-else-if="dbView === 'artist'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'artists'">← 返回列表</button>
+                  艺人工作台
+                </div>
+                <DbArtistWorkspace :uid="dbEmbedUid" embedded />
+              </div>
+              <div v-else-if="dbView === 'artists'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  艺人
+                </div>
+                <DbArtistsList embedded @open="openDbPath" />
+              </div>
+
+              <!-- 艺人展示（首页轮动，内嵌） -->
+              <div v-else-if="dbView === 'showcase'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  艺人展示
+                </div>
+                <DbShowcasePanel />
+              </div>
+
+              <!-- 专辑列表 / 工作台（内嵌） -->
+              <div v-else-if="dbView === 'album'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'albums'">← 返回列表</button>
+                  专辑工作台
+                </div>
+                <DbAlbumWorkspace :uid="dbEmbedUid" embedded />
+              </div>
+              <div v-else-if="dbView === 'albums'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  专辑
+                </div>
+                <DbAlbumsList embedded @open="openDbPath" />
+              </div>
+
+              <!-- 歌曲列表 / 工作台（内嵌） -->
+              <div v-else-if="dbView === 'song'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'songs'">← 返回列表</button>
+                  歌曲工作台
+                </div>
+                <DbSongWorkspace :uid="dbEmbedUid" embedded />
+              </div>
+              <div v-else-if="dbView === 'songs'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  歌曲
+                </div>
+                <DbSongsList embedded @open="openDbPath" />
+              </div>
+
+              <!-- 博主管理（内嵌） -->
+              <div v-else-if="dbView === 'uploaders'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  博主管理
+                </div>
+                <SettingsUploadersPanel />
+              </div>
+
+              <!-- 回收站（内嵌） -->
+              <div v-else-if="dbView === 'recycle'" class="db-embed-panel">
+                <div class="panel-subtitle db-embed-head">
+                  <button class="db-back" type="button" @click="dbView = 'home'">← 返回</button>
+                  回收站
+                </div>
+                <DbRecycleView embedded />
+              </div>
             </section>
+
+            <!-- 分区三：系统信息 -->
+            
 
           </div>
         </div>
@@ -1441,9 +1463,9 @@ onMounted(() => {
 
 .container-sa {
   width: 100%;
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px;
+  padding: 0 var(--sa-gutter, 36px);
 }
 @media (max-width: 768px) {
   .container-sa {
@@ -1473,22 +1495,27 @@ onMounted(() => {
 .settings-layout {
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  gap: 30px;
   padding-bottom: 56px;
 }
 /* HeroUI Tabs 风格（tabs__list：圆角浅底 + 细边框） */
 .settings-nav {
-  width: 200px;
+  width: 216px;
   flex-shrink: 0;
   position: sticky;
-  top: 76px;
+  top: 88px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px;
-  background: var(--sa-elevated);
-  border: 1px solid var(--sa-border-subtle);
-  border-radius: 14px;
+  gap: 2px;
+  padding: 10px;
+  background: color-mix(in oklab, var(--sa-elevated) 94%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid color-mix(in oklab, var(--sa-text-primary) 9%, transparent);
+  border-radius: 24px;
+  box-shadow:
+    0 16px 40px -20px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 0 color-mix(in oklab, var(--sa-text-primary) 8%, transparent);
   overflow-x: hidden;
 }
 .nav-item {
@@ -1496,32 +1523,65 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   width: 100%;
-  height: 40px;
-  padding: 0 12px;
+  height: 44px;
+  padding: 0 14px;
   border: none;
-  border-radius: 10px;
+  border-radius: 16px;
   background: transparent;
-  color: var(--sa-text-primary);
-  font-size: 13px;
+  color: var(--sa-text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background-color 0.22s var(--spring, cubic-bezier(0.16, 1, 0.3, 1)),
+    color 0.22s ease,
+    transform 0.3s var(--spring, cubic-bezier(0.16, 1, 0.3, 1));
   text-align: left;
 }
+.nav-item :deep(svg) {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+.nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav-code {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.42;
+  transition: opacity 0.2s ease;
+}
 .nav-item:hover {
-  background: var(--sa-subtle);
+  background: color-mix(in oklab, var(--sa-text-primary) 6%, transparent);
   color: var(--sa-text-primary);
 }
-/* 选中：单色画廊风（HeroUI 原生做法）——深底白字，随主题自动反转 */
-/* 需在 :hover 之后定义，避免指针停留（触屏 hover 残留）盖掉高亮 */
+/* 选中：白色物理胶囊（流光玻璃的招牌），深色主题下白底黑字、亮色主题下反相 */
 .nav-item--active,
 .nav-item--active:hover {
   background: var(--sa-text-primary);
   color: var(--sa-bg);
-  font-weight: 600;
+  font-weight: 700;
+  box-shadow: 0 6px 22px -6px color-mix(in oklab, var(--sa-text-primary) 45%, transparent);
+}
+.nav-item--active :deep(svg) {
+  opacity: 1;
+}
+.nav-item--active .nav-code {
+  opacity: 0.6;
 }
 .settings-content {
   flex: 1;
   min-width: 0;
+  /* 字体与侧边栏完全一致：层级只靠字号 / 字重区分，不再混用等宽字 */
+  font-family: var(--sa-font-sans, inherit);
 }
 /* 移动端溢出标签条：桌面端不渲染 */
 .settings-otabs {
@@ -1553,9 +1613,28 @@ onMounted(() => {
   }
 }
 
-/* ===== Section 通用 ===== */
+/* ===== Section 通用：流光玻璃卡片 ===== */
 .sa-section {
   min-height: 240px;
+  padding: 26px 28px;
+  /* 不做 backdrop-filter：整块内容区被模糊会让页面像蒙了层雾。
+     靠 96% 实底 + 1px 描边 + 内高光表达「玻璃」质感。 */
+  background: color-mix(in oklab, var(--sa-elevated) 96%, transparent);
+  border: 1px solid color-mix(in oklab, var(--sa-text-primary) 9%, transparent);
+  border-radius: 28px;
+  box-shadow:
+    0 18px 50px -22px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 0 color-mix(in oklab, var(--sa-text-primary) 8%, transparent);
+}
+/* 多个分区叠放时给出间距（原来靠外部 margin） */
+.settings-content > .sa-section + .sa-section {
+  margin-top: 22px;
+}
+@media (max-width: 768px) {
+  .sa-section {
+    padding: 18px 16px;
+    border-radius: 22px;
+  }
 }
 .section-head {
   display: flex;
@@ -2134,21 +2213,80 @@ onMounted(() => {
 }
 
 /* ===== Panel ===== */
+/* 分区内的条目组：与 YouTube 下载页 .yt-block 同一配方 */
 .panel {
   background: var(--sa-elevated);
   border: 1px solid var(--sa-border-subtle);
-  border-radius: 12px;
-  padding: 20px;
+  border-radius: 20px;
+  padding: 16px 18px;
+  transition: border-color 0.25s ease;
+}
+.panel:hover {
+  border-color: color-mix(in oklab, var(--sa-text-primary) 16%, transparent);
 }
 .panel + .panel {
-  margin-top: 16px;
+  margin-top: 14px;
 }
-.panel-subtitle {
-  margin-bottom: 14px;
-  font-size: 13px;
-  font-weight: 600;
+
+.hint-toggle {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--sa-accent);
-  letter-spacing: 0.02em;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.hint-toggle:hover {
+  text-decoration: underline;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.account-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.account-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--sa-accent-subtle, rgb(4 133 247 / 12%));
+  color: var(--sa-accent);
+  font-weight: 600;
+  flex: none;
+}
+.account-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--sa-text-primary);
+}
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sa-border-subtle);
+}
+
+.panel-subtitle {
+  margin-bottom: 12px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--sa-text-primary);
+  letter-spacing: -0.005em;
 }
 
 /* ===== 资料库入口卡片 ===== */
@@ -2317,41 +2455,7 @@ button.db-entry {
 }
 
 /* 开关 */
-.sa-switch {
-  display: inline-flex;
-  cursor: pointer;
-}
-.sa-switch input {
-  display: none;
-}
-.sa-switch .track {
-  width: 40px;
-  height: 22px;
-  border-radius: 9999px;
-  background: var(--sa-hover);
-  border: 1px solid var(--sa-border);
-  position: relative;
-  transition: background 0.2s, border-color 0.2s;
-  flex-shrink: 0;
-}
-.sa-switch .thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--sa-text-tertiary);
-  transition: all 0.2s;
-}
-.sa-switch input:checked + .track {
-  background: var(--sa-accent-subtle);
-  border-color: var(--sa-accent-border);
-}
-.sa-switch input:checked + .track .thumb {
-  left: 20px;
-  background: var(--sa-accent);
-}
+/* 开关样式统一由 settings-shared.css 提供（子面板共用） */
 
 .switch-row {
   display: flex;
@@ -3349,4 +3453,384 @@ html[data-theme='dark'] .storage-stat {
 .agent-row:last-child {
   border-bottom: none;
 }
+
+/* ==========================================================================
+   设置页视觉统一（v3.9.994）
+   —— 只改样式，不动结构：
+   1. 卡片 28px → 16px 圆角，投影收敛成「贴边 + 远投影 + 顶部高光」三层；
+   2. 分组标题改衬线（思源宋体 500），与组合页 / 浏览页同一套排印；
+   3. 字段行统一 48px 高 + 发丝分隔线，标签与控件基线对齐；
+   4. 强调色只留给可交互元素，分组标题回到中性色。
+   ========================================================================== */
+.sa-section {
+  border-radius: 16px;
+  padding: 22px 24px 12px;
+  background: var(--sa-elevated);
+  border: 1px solid color-mix(in oklab, var(--sa-text-primary) 7%, transparent);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.025),
+    0 14px 34px -22px rgba(15, 23, 42, 0.28),
+    inset 0 1px 0 color-mix(in oklab, #ffffff 92%, transparent);
+}
+html[data-theme='dark'] .sa-section {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 16px 36px -24px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+/* 分组标题：衬线 + 中性色 */
+.panel-subtitle,
+.panel-group-title {
+  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--sa-text-primary);
+  margin-bottom: 10px;
+}
+.panel-subtitle {
+  font-size: 17.5px;
+}
+.panel-group-title {
+  font-size: 15px;
+  margin: 22px 0 8px;
+}
+.panel-subtitle:first-child,
+.panel-group-title:first-child {
+  margin-top: 0;
+}
+
+/* 字段行：48 高 + 发丝线 */
+.field-row {
+  min-height: 48px;
+  padding: 10px 0;
+  gap: 16px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+.field-row:last-child {
+  border-bottom: none;
+}
+.field-label {
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+.field-hint {
+  font-size: 11.5px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+/* 控件落在右侧固定轨道，扫读路径更短 */
+.field-control {
+  width: clamp(210px, 16vw, 300px);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.field-control > .sa-input {
+  flex: 1;
+}
+
+/* 开关与按钮尺寸对齐 */
+.sa-btn {
+  height: 32px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+
+/* ===== 设置侧栏：与设计稿对齐（白卡浮起 + 斜体衬线序号） ===== */
+.settings-nav {
+  width: 230px;
+  gap: 4px;
+  padding: 0;
+}
+.nav-item {
+  height: 47px;
+  padding: 11px 16px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  font-size: 13.5px;
+  font-weight: 500;
+  gap: 10px;
+  transition: background 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    color 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+}
+.nav-item:hover {
+  background: color-mix(in oklab, var(--sa-elevated) 55%, transparent);
+  color: var(--sa-text-primary);
+}
+.nav-item--active,
+.nav-item--active:hover {
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  font-weight: 600;
+  border-color: color-mix(in oklab, var(--sa-text-primary) 7%, transparent);
+  box-shadow:
+    0 4px 16px -2px rgba(15, 23, 42, 0.06),
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    inset 0 1px 0 color-mix(in oklab, #ffffff 92%, transparent);
+}
+html[data-theme='dark'] .nav-item--active,
+html[data-theme='dark'] .nav-item--active:hover {
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  border-color: rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 4px 16px -2px rgba(0, 0, 0, 0.5),
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+.nav-label {
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.nav-item--active .nav-label {
+  transform: translateX(2px);
+}
+/* 序号：Instrument Serif 斜体，激活变强调色 */
+.nav-code {
+  font-family: 'Instrument Serif', 'Playfair Display', Georgia, serif;
+  font-style: italic;
+  font-size: 16px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  opacity: 0.55;
+  color: var(--sa-text-tertiary);
+  transition: color 0.22s ease, opacity 0.22s ease;
+}
+.nav-item--active .nav-code {
+  color: var(--sa-accent);
+  opacity: 1;
+  font-weight: 500;
+}
+
+
+/* ===== 设置分组画廊：两列等高，内容少的留白到底 ===== */
+/* 资料库内嵌视图：外层只做容器（不再套卡片），内部组件自带卡片 */
+.db-embed-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.db-embed-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+.settings-gallery > .sa-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+}
+.settings-gallery > .sa-section + .sa-section {
+  margin-top: 0;
+}
+@media (max-width: 1080px) {
+  .settings-gallery {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ===== 画廊内不再套第二层卡片 ===== */
+.settings-gallery .panel {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+}
+/* 小节标签：小号等宽大写，不跟卡片主标题抢戏 */
+.settings-gallery .panel-subtitle {
+  font-family: 'Alibaba PuHuiTi 3.0', ui-monospace, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sa-text-tertiary);
+  margin: 18px 0 8px;
+}
+.settings-gallery .panel:first-of-type .panel-subtitle:first-child {
+  margin-top: 2px;
+}
+/* 卡片主标题：唯一的大标题 */
+.settings-gallery > .sa-section > .panel-group-title {
+  font-family: 'Noto Serif SC', 'Songti SC', serif;
+  font-size: 17.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--sa-text-primary);
+  margin: 0 0 6px;
+}
+/* 卡片只有 546px 宽：字段必须单列，否则每列 ~250px 挤成一团 */
+.settings-gallery .panel-grid {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+
+/* 横跨两列的大卡：字段可以走两列 */
+.settings-gallery > .sa-section--wide {
+  grid-column: 1 / -1;
+}
+.settings-gallery > .sa-section--wide .panel-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 32px;
+}
+@media (max-width: 1080px) {
+  .settings-gallery > .sa-section--wide .panel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ===== 侧栏：去掉玻璃外框，只留浮起条目（对齐设计稿） ===== */
+.settings-nav {
+  width: 230px;
+  gap: 4px;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.nav-cap {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--sa-text-tertiary);
+  opacity: 0.7;
+  padding: 0 16px;
+  margin-bottom: 8px;
+}
+.settings-nav .nav-item {
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.settings-nav .nav-item:hover {
+  background: color-mix(in oklab, var(--sa-elevated) 55%, transparent);
+}
+.settings-nav .nav-item--active,
+.settings-nav .nav-item--active:hover {
+  background: var(--sa-elevated);
+  border-color: color-mix(in oklab, var(--sa-text-primary) 7%, transparent);
+  box-shadow:
+    0 4px 16px -2px rgba(15, 23, 42, 0.06),
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    inset 0 1px 0 color-mix(in oklab, #ffffff 92%, transparent);
+}
+html[data-theme='dark'] .settings-nav .nav-item--active,
+html[data-theme='dark'] .settings-nav .nav-item--active:hover {
+  border-color: rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 4px 16px -2px rgba(0, 0, 0, 0.5),
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+
+.nav-cap--sub {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--sa-border-subtle);
+}
+
+
+/* 锚点滚动时避开吸顶栏 */
+.settings-gallery > .sa-section {
+  scroll-margin-top: 96px;
+}
+
+
+/* ==========================================================================
+   统一按钮（v3.9.994）—— 设置页只允许三种视觉：
+   主按钮（强调色）/ 次按钮（描边浮起）/ 危险按钮（红描边）
+   ========================================================================== */
+.sa-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 8px;
+  border: 1px solid var(--sa-border, rgba(15, 23, 42, 0.09));
+  background: var(--sa-elevated);
+  color: var(--sa-text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease,
+    transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+html[data-theme='dark'] .sa-btn {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.sa-btn:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--sa-accent) 40%, var(--sa-border, rgba(15, 23, 42, 0.09)));
+}
+.sa-btn:active:not(:disabled) {
+  transform: scale(0.975);
+}
+.sa-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sa-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 主按钮 */
+.sa-btn--primary {
+  background: var(--sa-accent);
+  border-color: transparent;
+  color: #fff;
+  box-shadow:
+    0 1px 2px rgba(4, 133, 247, 0.25),
+    0 6px 16px -8px rgba(4, 133, 247, 0.55);
+}
+.sa-btn--primary:hover:not(:disabled) {
+  border-color: transparent;
+  filter: brightness(1.06);
+}
+
+/* 危险按钮：红描边 + 红字，不填色 */
+.sa-btn--danger {
+  background: transparent;
+  border-color: color-mix(in oklab, #e11d48 30%, transparent);
+  color: #e11d48;
+  box-shadow: none;
+}
+.sa-btn--danger:hover:not(:disabled) {
+  border-color: color-mix(in oklab, #e11d48 55%, transparent);
+  background: color-mix(in oklab, #e11d48 8%, transparent);
+}
+
 </style>
+
+

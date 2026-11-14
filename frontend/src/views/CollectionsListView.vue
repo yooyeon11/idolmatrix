@@ -177,9 +177,9 @@ onMounted(load)
   min-height: 100vh;
 }
 .mv-container {
-  max-width: 1280px;
+  max-width: var(--sa-content-max, 1280px);
   margin: 0 auto;
-  padding: 0 32px 64px;
+  padding: 0 var(--sa-gutter, 36px) 64px;
 }
 .page-head {
   display: flex;
@@ -236,26 +236,36 @@ onMounted(load)
   gap: 8px;
   min-width: 0;
 }
+/* 新建收藏夹输入框：与全站筛选控件同高（34px）/ 同圆角 / 同字号，
+   只是它带主操作按钮，所以不套 SaFilterBar 那颗纯筛选胶囊 */
 .search-input {
   width: 220px;
-  padding: 9px 16px;
-  border: 1px solid var(--sa-border-subtle);
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--sa-border);
   border-radius: 9999px;
   background: var(--sa-elevated);
   color: var(--sa-text-primary);
-  font-size: 14px;
+  font-family: inherit;
+  font-size: 12.5px;
   outline: none;
 }
 .search-input:focus {
-  border-color: var(--sa-accent);
+  border-color: var(--sa-text-tertiary);
+}
+.search-input::placeholder {
+  color: var(--sa-text-tertiary);
 }
 .create-btn {
-  padding: 9px 16px;
+  height: 34px;
+  padding: 0 16px;
   border: 0;
   border-radius: 9999px;
   background: var(--sa-accent);
   color: #fff;
-  font-size: 13px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
 }
 .create-btn:disabled {

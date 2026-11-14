@@ -40,6 +40,40 @@ def current() -> Dict[str, Any]:
         return dict(_state)
 
 
+def _in_container() -> bool:
+    """是否在容器内运行。"""
+    import os
+
+    try:
+        return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+    except OSError:
+        return False
+
+
+def _normalize(url: str) -> str:
+    """纠正「宿主机上解析不了 host.docker.internal」这个高频坑。
+
+    设置里为了容器部署常填 http://host.docker.internal:7897，
+    但宿主机直接跑后端时该名字不存在（getaddrinfo 失败），表现为
+    「明明配了代理却没走代理」。非容器环境统一换成 127.0.0.1。
+    """
+    url = (url or "").strip()
+    if url and "host.docker.internal" in url and not _in_container():
+        return url.replace("host.docker.internal", "127.0.0.1")
+    return url
+
+
+def enabled_url() -> str:
+    """当前生效的代理地址；未开启或未填地址返回空串。
+
+    会先按 TTL 刷新一次（设置页改完立即 set_proxy，跨进程/冷启动走这里读库）。
+    """
+    _load_from_db()
+    with _lock:
+        enabled, url = _state["enabled"], _state["url"]
+    return _normalize(url) if enabled else ""
+
+
 def _load_from_db() -> None:
     global _loaded_at
     now = time.monotonic()
@@ -92,6 +126,7 @@ def urlopen(req: urllib.request.Request, timeout: Optional[float] = None):
     with _lock:
         enabled, url = _state["enabled"], _state["url"]
     if enabled and url:
+        url = _normalize(url)
         proxies: Dict[str, str] = {"http": url, "https": url}
     else:
         proxies = {}  # 显式空：不继承环境变量代理

@@ -1,0 +1,50 @@
+{
+ "_说明": "有 ytid 的批次（YouTube 下载，带 .info.json + 封面边车）。复制本文件改 batch/items 即可。缺项才推断；显式 [] 永远胜出。",
+ "batch": "20261018-示例",
+ "title": "示例批次：XX 团体《曲名》",
+ "kind": "ytid",
+ "owner": "",
+ "note": "给业主看的说明：素材来源、口径依据、待确认项",
+ "entities": {
+  "groups": [
+   {
+    "name": "新团体名",
+    "korean_name": "한글명",
+    "group_type": "Girl Group",
+    "gender_type": "Female",
+    "origin_country": "South Korea",
+    "debut_date": "2000-01-01",
+    "why": "出道日依据（英文维基 infobox / 作品表）"
+   }
+  ],
+  "songs": [
+   {
+    "name": "曲名",
+    "ra": "group:新团体名",
+    "release_date": "2000-01-01",
+    "why": "发行日依据"
+   }
+  ]
+ },
+ "items": [
+  {
+   "ytid": "XXXXXXXXXXX",
+   "subj": "主体显示名",
+   "ev": "活动名",
+   "tail": "活动名 机位",
+   "perf": "2026-01-01",
+   "pub": "2026-01-02",
+   "vt": ["PerformanceVideo"],
+   "g": [34],
+   "a": [],
+   "sids": [1066],
+   "sdisp": ["曲名显示名"],
+   "solo": false,
+   "participants": [],
+   "dest_dir": null,
+   "ident": "艺人田姬振",
+   "ch": null,
+   "note": "逐条依据 / 待确认"
+  }
+ ]
+}

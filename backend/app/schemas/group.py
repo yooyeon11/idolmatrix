@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, List, Optional
 
 from pydantic import Field
@@ -32,7 +32,7 @@ class GroupBase(ORMModel):
     external_links: Optional[List[Any]] = None
     avatar_path: Optional[str] = None
     banner_path: Optional[str] = None
-    hide_from_home: bool = False
+    featured_in_home: bool = False
 
 
 class GroupCreate(GroupBase):
@@ -58,7 +58,7 @@ class GroupUpdate(ORMModel):
     avatar_path: Optional[str] = None
     banner_path: Optional[str] = None
     company_ids: Optional[List[int]] = None
-    hide_from_home: Optional[bool] = None
+    featured_in_home: Optional[bool] = None
 
 
 class GroupSubUnitBrief(EntityReadMixin):
@@ -79,6 +79,8 @@ class GroupRead(GroupBase, EntityReadMixin):
     parent_name: Optional[str] = None
     parent_uid: Optional[str] = None
     sub_units: List[GroupSubUnitBrief] = []
+    # 前端图片缓存键（换海报后 URL 自动变化）；与 ArtistRead 同口径
+    updated_at: Optional[datetime] = None
 
 
 class GroupBrief(EntityReadMixin):

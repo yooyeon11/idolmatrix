@@ -29,7 +29,7 @@ class ArtistBase(ORMModel):
     tagline: Optional[str] = None
     avatar_path: Optional[str] = None
     banner_path: Optional[str] = None
-    hide_from_home: bool = False
+    featured_in_home: bool = False
 
 
 class ArtistCreate(ArtistBase):
@@ -56,7 +56,7 @@ class ArtistUpdate(ORMModel):
     tagline: Optional[str] = None
     avatar_path: Optional[str] = None
     banner_path: Optional[str] = None
-    hide_from_home: Optional[bool] = None
+    featured_in_home: Optional[bool] = None
 
 
 class ArtistRead(ArtistBase, EntityReadMixin):

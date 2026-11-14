@@ -1,5 +1,7 @@
+import { nextTick } from 'vue'
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { MIRROR_MODE } from '@/utils/mirror'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -201,7 +203,55 @@ const router = createRouter({
   routes,
 })
 
+// ===== 顶栏导航共享元素动画（FLIP）=====
+// 首页导航标签成组在右栏左缘，其它页面在页面正中。路由切换时记录旧位置，
+// 新页面渲染后把新导航反向平移回旧位置再弹簧滑动到目标位 —— 视觉上同一组
+// 标签连续滑动（进入其它页滑向居中，返回首页滑回原位）。仅桌面端生效。
+const NAV_FLIP_SELECTORS = ['nav', 'actions'] as const
+type NavFlipKind = (typeof NAV_FLIP_SELECTORS)[number]
+let navFlipSnapshot: { kind: NavFlipKind; rect: DOMRect }[] = []
+
+function snapshotHeaderNav() {
+  navFlipSnapshot = []
+  for (const kind of NAV_FLIP_SELECTORS) {
+    const el = document.querySelector<HTMLElement>(`[data-sa-${kind}]`)
+    if (el) navFlipSnapshot.push({ kind, rect: el.getBoundingClientRect() })
+  }
+}
+
+async function playHeaderNavFlip() {
+  const snapshot = navFlipSnapshot
+  navFlipSnapshot = []
+  if (!snapshot.length) return
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  await nextTick()
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  for (const { kind, rect } of snapshot) {
+    // 旧导航已滚出视口（如首页右栏 scrolled 上去）时不做位移
+    if (rect.bottom < 0 || rect.top > window.innerHeight) continue
+    const el = document.querySelector<HTMLElement>(`[data-sa-${kind}]`)
+    if (!el) continue
+    const now = el.getBoundingClientRect()
+    const dx = rect.left - now.left
+    const dy = rect.top - now.top
+    if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue
+    el.getAnimations().forEach((a) => a.cancel())
+    el.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px)` },
+        { transform: 'translate(0px, 0px)' },
+      ],
+      { duration: 480, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+    )
+  }
+}
+
 router.beforeEach(async (to) => {
+  snapshotHeaderNav()
+  // 在线版不开放设置页（含直接输入地址），一律回首页
+  if (MIRROR_MODE && to.path.startsWith('/settings')) {
+    return { path: '/' }
+  }
   const auth = useAuthStore()
   if (!auth.ready) {
     await auth.loadStatus()
@@ -225,6 +275,7 @@ router.beforeEach(async (to) => {
 router.afterEach((to) => {
   const title = (to.meta?.title as string) || ''
   document.title = title ? `${title} · idolMatrix` : 'idolMatrix'
+  void playHeaderNavFlip()
 })
 
 export default router

@@ -15,8 +15,6 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
-import hmac
-
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from fastapi.responses import FileResponse, Response
@@ -25,10 +23,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, object_session, selectinload
 
 from app.api.guards import require_active
+from app.core.audit import mark_before, mark_changes
 from app.core.config import settings
 from app.core.deps import DbDep, PaginationDep
 from app.core.ffmpeg import FFmpegNotFoundError, require_ffmpeg
+from app.core.vocab import CAMERA_ANGLES, CAMERA_LABELS
 from app.services.soft_delete_service import soft_delete_music_video
+from app.services import video_publish_service
 from app.services import video_scoring_service
 from app.services import video_chapters_service
 from app.media.ffmpeg import FFmpegError
@@ -58,7 +59,10 @@ from app.schemas import (
     PageResponse,
     ResolutionFacet,
     ResolutionFacetResponse,
+    ValueFacet,
+    ValueFacetResponse,
     VideoPathSuggestion,
+    VideoPublishRead,
     VideoRelocateRequest,
     VideoRelocateResult,
 )
@@ -86,14 +90,23 @@ from app.services.video_thumb import (
 )
 from app.services.relation_service import apply_video_song_tracks
 from app.services.group_tree import expand_group_ids
+from app.services import related_service
+from app.schemas.music_video import (
+    MusicVideoRelated,
+    MusicVideoRelatedArtist,
+    MusicVideoRelatedWork,
+)
 from app.services.video_meta import (
     RESOLUTION_TIERS,
     RESOLUTION_UNKNOWN,
     cover_from_names,
     is_short_video,
+    maybe_regenerate_session,
     normalize_video_types,
     resolution_ranges,
     resolution_tier,
+    resolve_camera_angle,
+    resolve_session_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,7 +120,7 @@ COVER_VARIANT_QUALITY = 85
 # 与 library_service._purge_derived_for 的清理逻辑共用同一字面量，避免改名后漏清
 COVER_VARIANT_CACHE_DIR = VIDEO_THUMB_CACHE_DIRNAME
 # 封面接口沿用「仅私有缓存」语义：登录门禁下的资源不应落进共享缓存
-COVER_CACHE_CONTROL = "private, max-age=0, must-revalidate"
+COVER_CACHE_CONTROL = "private, max-age=604800"
 
 
 def _relations_options():
@@ -323,6 +336,13 @@ def list_videos(
         None,
         description="逗号分隔的分辨率档位过滤：8k/4k/2k/1080p/720p/480p/360p/240p/sd/unknown",
     ),
+    camera_angle: Optional[str] = Query(
+        None,
+        description="逗号分隔的机位过滤（规范值，见 app/core/vocab.py）；`__none__` = 未标注",
+    ),
+    session_label: Optional[str] = Query(
+        None, description="逗号分隔的场次过滤（`YYMMDD - 活动名`）"
+    ),
     sort: Optional[str] = Query(
         None,
         description="排序：performance_date_desc/asc、published_date_desc/asc，默认按入库时间倒序",
@@ -377,9 +397,15 @@ def list_videos(
     if ingestion_status:
         stmt = stmt.where(MusicVideo.ingestion_status == ingestion_status)
     if uploader:
-        stmt = stmt.where(MusicVideo.original_uploader == uploader)
+        # 频道改名后按 channel_id 归组：旧名页面也能列出新名下的视频
+        from app.services.uploader_channel_service import channel_identity_for_uploader
+
+        _cid, _names = channel_identity_for_uploader(db, uploader)
+        stmt = stmt.where(MusicVideo.original_uploader.in_(_names or [uploader]))
     stmt = _filter_is_short(stmt, is_short)
     stmt = _filter_resolution(stmt, resolution)
+    stmt = _filter_camera(stmt, camera_angle)
+    stmt = _filter_session(stmt, session_label)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     items = (
         db.scalars(
@@ -460,6 +486,21 @@ def random_shorts_feed(
         _fill_relations(mv)
         _fill_participants(mv)
     return [_to_read(mv) for mv in items]
+
+
+@router.get("/{mv_id}/stage-matrix")
+def get_video_stage_matrix(mv_id: int, db: DbDep):
+    """打歌期三维矩阵：同曲(或同活动)视频按 演出日 × 成员 × 机位 分组。
+
+    只读推导，机位由现有 video_type + 横竖屏归类，不依赖新增数据。
+    available=False 表示无 song/event 锚点或池内仅自身，前端隐藏矩阵舱。
+    """
+    mv = _get_active(db, mv_id)
+    if not mv:
+        raise HTTPException(404, "MusicVideo 不存在")
+    from app.services import stage_matrix_service
+
+    return stage_matrix_service.build_stage_matrix(db, mv)
 
 
 @router.get("/{mv_id}/chapters")
@@ -695,27 +736,22 @@ class AiScoreResultRequest(BaseModel):
     note: str = ""
 
 
-def _external_token(db: DbDep) -> str:
-    from app.services import app_settings as app_settings_service
-
-    read = app_settings_service.read_all(db)
-    return (read.external_api.token or "").strip()
-
-
 @router.post("/{mv_id}/ai-score/result")
 def submit_ai_score_result(
     mv_id: int, payload: AiScoreResultRequest, request: Request, db: DbDep
 ):
-    """外部写入评分结果。免浏览器会话；须带 X-API-Token 头（设置页生成）。
+    """外部写入评分结果。免浏览器会话；须带 X-API-Token 头（设置 · API 令牌）。
 
     该路径在 deps.is_public 白名单内（中间件跳过会话/CSRF），鉴权在这里自验。
+    新卡与旧版单 Token 都接受：统一走 get_external_principal，
+    这样「卡没有 edit 权限」会得到 403 而不是含糊的 401。
     """
-    expected = _external_token(db)
-    if not expected:
-        raise HTTPException(403, "未配置外部写入 Token（设置 · AI 设置 · 视频评分）")
+    from app.core.deps import get_external_principal
+
     provided = (request.headers.get("x-api-token") or "").strip()
-    if not provided or not hmac.compare_digest(provided, expected):
+    if not provided:
         raise HTTPException(401, "X-API-Token 缺失或不正确")
+    get_external_principal(db, provided, request)
     mv = _get_active(db, mv_id)
     try:
         row = video_scoring_service.store_external_score(
@@ -850,6 +886,40 @@ def _filter_resolution(stmt, resolution: Optional[str]):
     return stmt.where(or_(*clauses))
 
 
+# 机位筛选里的「未标注」哨兵值（前端下拉用同一个字符串）
+CAMERA_NONE_KEY = "__none__"
+
+
+def _filter_camera(stmt, camera_angle: Optional[str]):
+    """按机位过滤（逗号分隔多选）。`__none__` = 未标注（camera_angle 为空）。"""
+    if not camera_angle:
+        return stmt
+    keys = [k.strip() for k in camera_angle.split(",") if k.strip()]
+    if not keys:
+        return stmt
+    clauses = []
+    if CAMERA_NONE_KEY in keys:
+        clauses.append(
+            or_(MusicVideo.camera_angle.is_(None), MusicVideo.camera_angle == "")
+        )
+    values = [k for k in keys if k != CAMERA_NONE_KEY]
+    if values:
+        clauses.append(MusicVideo.camera_angle.in_(values))
+    if not clauses:
+        return stmt
+    return stmt.where(or_(*clauses))
+
+
+def _filter_session(stmt, session_label: Optional[str]):
+    """按场次过滤（逗号分隔多选，值形如 `261017 - Music Bank`）。"""
+    if not session_label:
+        return stmt
+    keys = [k.strip() for k in session_label.split(",") if k.strip()]
+    if not keys:
+        return stmt
+    return stmt.where(MusicVideo.session_label.in_(keys))
+
+
 @router.get("/folder-browse", response_model=FolderBrowseResult)
 def folder_browse(
     db: DbDep,
@@ -935,6 +1005,96 @@ def resolution_facets(
     )
 
 
+@router.get("/camera-facets", response_model=ValueFacetResponse)
+def camera_facets(
+    db: DbDep,
+    q: Optional[str] = Query(None),
+    video_type: Optional[str] = Query(None),
+    video_types: Optional[str] = Query(None),
+    is_short: Optional[bool] = Query(None),
+    ingestion_status: Optional[str] = Query(None),
+):
+    """机位筛选菜单：当前筛选条件下各机位的条数（含「未标注」）。
+
+    顺序跟词表一致（`CAMERA_ANGLES`），未标注排最后；空机位不展示。
+    """
+    stmt = select(MusicVideo.camera_angle, func.count(MusicVideo.id)).where(
+        MusicVideo.deleted_at.is_(None)
+    )
+    stmt = _filter_by_query_and_types(stmt, q, video_type, video_types)
+    if ingestion_status:
+        stmt = stmt.where(MusicVideo.ingestion_status == ingestion_status)
+    stmt = _filter_is_short(stmt, is_short)
+    rows = db.execute(stmt.group_by(MusicVideo.camera_angle)).all()
+
+    counts: dict[str, int] = {}
+    for value, cnt in rows:
+        key = (value or "").strip() or CAMERA_NONE_KEY
+        counts[key] = counts.get(key, 0) + int(cnt)
+
+    items: list[ValueFacet] = []
+    for camera in CAMERA_ANGLES:
+        if counts.get(camera):
+            items.append(
+                ValueFacet(key=camera, count=counts[camera], label=CAMERA_LABELS.get(camera))
+            )
+    # 词表外的历史值（理论上写入时已拦住，外部直写可能留下）原样列出，避免计数丢失
+    for key, cnt in counts.items():
+        if key == CAMERA_NONE_KEY or key in CAMERA_ANGLES:
+            continue
+        items.append(ValueFacet(key=key, count=cnt))
+    if counts.get(CAMERA_NONE_KEY):
+        items.append(
+            ValueFacet(key=CAMERA_NONE_KEY, count=counts[CAMERA_NONE_KEY], label="未标注")
+        )
+    return ValueFacetResponse(items=items)
+
+
+@router.get("/session-facets", response_model=ValueFacetResponse)
+def session_facets(
+    db: DbDep,
+    q: Optional[str] = Query(None),
+    video_type: Optional[str] = Query(None),
+    video_types: Optional[str] = Query(None),
+    is_short: Optional[bool] = Query(None),
+    ingestion_status: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """场次筛选菜单：当前筛选条件下条数最多的 N 个场次（按条数倒序）。"""
+    stmt = select(MusicVideo.session_label, func.count(MusicVideo.id)).where(
+        MusicVideo.deleted_at.is_(None),
+        MusicVideo.session_label.is_not(None),
+        MusicVideo.session_label != "",
+    )
+    stmt = _filter_by_query_and_types(stmt, q, video_type, video_types)
+    if ingestion_status:
+        stmt = stmt.where(MusicVideo.ingestion_status == ingestion_status)
+    stmt = _filter_is_short(stmt, is_short)
+    rows = db.execute(
+        stmt.group_by(MusicVideo.session_label)
+        .order_by(func.count(MusicVideo.id).desc())
+        .limit(limit)
+    ).all()
+    return ValueFacetResponse(
+        items=[ValueFacet(key=str(label), count=int(cnt)) for label, cnt in rows if label]
+    )
+
+
+def _with_publish(db, mv: MusicVideo, read: MusicVideoRead) -> MusicVideoRead:
+    """详情专用：回填 B 站分发记录。
+
+    只在单条详情调用（按 id / 按 uid 两个入口都要走这里）。
+    列表接口刻意不填——逐行查 video_publishes 会把分页查询退化成 N+1，
+    而列表卡片本来也不展示 BV 号。
+    """
+    row = video_publish_service.get_publish(db, mv.id)
+    if row is not None:
+        read.publish = VideoPublishRead.model_validate(
+            video_publish_service.to_read(row)
+        )
+    return read
+
+
 @router.get("/by-uid/{uid}", response_model=MusicVideoRead)
 def get_video_by_uid(uid: str, db: DbDep):
     """按永久业务 uid 查询；已软删除的实体默认不可见。"""
@@ -947,7 +1107,9 @@ def get_video_by_uid(uid: str, db: DbDep):
         raise HTTPException(404, "MusicVideo 不存在")
     _fill_relations(mv)
     _fill_participants(mv)
-    return _to_read(mv)
+    # ⚠ 前端详情页走的是这个接口（路由 /videos/:uid），不是 /{mv_id}，
+    #   两处都必须回填 publish，否则「B 站播放源」永远显示未绑定。
+    return _with_publish(db, mv, _to_read(mv))
 
 @router.post("", response_model=MusicVideoRead, status_code=201)
 def create_video(payload: MusicVideoCreate, db: DbDep):
@@ -987,6 +1149,24 @@ def create_video(payload: MusicVideoCreate, db: DbDep):
     _fill_relations(mv)
     return _to_read(mv)
 
+@router.get("/{mv_id}/related", response_model=MusicVideoRelated)
+def get_related(mv_id: int, db: DbDep):
+    """右栏推荐：同曲 / 同组合（含小分队与成员 solo）/ 同公司 / 同场活动。"""
+    mv = _get_active(db, mv_id)
+    if not mv:
+        raise HTTPException(404, "MusicVideo 不存在")
+    works, artists = related_service.collect_related(db, mv)
+    return MusicVideoRelated(
+        works=[
+            MusicVideoRelatedWork(
+                video=MusicVideoBrief.model_validate(video), reason=reason
+            )
+            for video, reason in works
+        ],
+        artists=[MusicVideoRelatedArtist(**item) for item in artists],
+    )
+
+
 @router.get("/{mv_id}", response_model=MusicVideoRead)
 def get_video(mv_id: int, db: DbDep):
     mv = _get_active(db, mv_id)
@@ -994,15 +1174,17 @@ def get_video(mv_id: int, db: DbDep):
         raise HTTPException(404, "MusicVideo 不存在")
     _fill_relations(mv)
     _fill_participants(mv)
-    return _to_read(mv)
+    return _with_publish(db, mv, _to_read(mv))
 
 @router.patch("/{mv_id}", response_model=MusicVideoRead)
-def update_video(mv_id: int, payload: MusicVideoUpdate, db: DbDep):
+def update_video(mv_id: int, payload: MusicVideoUpdate, request: Request, db: DbDep):
     mv = _get_active(db, mv_id)
     if not mv:
         raise HTTPException(404, "MusicVideo 不存在")
     data = payload.model_dump(exclude_unset=True)
     data, rel = _split_relations(data)
+    # 审计：先抓旧值（后面的机位/场次归一化会改写 data，最终 diff 用归一化后的值）
+    before = mark_before(mv, list(data.keys()))
     if rel.get("tracks") is not None:
         data.pop("song_id", None)
         data.pop("song_ids", None)
@@ -1025,6 +1207,54 @@ def update_video(mv_id: int, payload: MusicVideoUpdate, db: DbDep):
         require_active(db, Song, data["song_id"], "Song")
     if data.get("subject_artist_id") is not None:
         require_active(db, Artist, data["subject_artist_id"], "Artist(subject)")
+
+    # 机位 / 场次（业主 2026-10-17 口径）：
+    # - 显式改了机位 → 只认权威词表，词表外 400（由业主决定是否扩充词表）
+    # - 显式改了场次 → 只校验格式（空串 = 清空）
+    # - 没显式改场次但改了日期/活动名/频道名 → 原值是自动生成的才重算，手改过的保持
+    if "camera_angle" in data:
+        # ★ 业主 2026-10-23：**机位只对官方舞台（PerformanceVideo）填**；
+        #   其他类型（Fancam / SpecialStage 特别舞台 / CoverStage / CollabStage /
+        #   OfficialMV / ShortVideo …）一律清空。
+        #   顺带修坑：原实现里 `camera_angle` 传 None/空串会被当成「没给值」→
+        #   又按 name 尾标推回来，导致**根本清不掉**。现在显式空值 = 真清空。
+        _vtype = data.get("video_type") or mv.video_type
+        _raw = (data.get("camera_angle") or "").strip()
+        if _vtype != "PerformanceVideo" or not _raw:
+            data["camera_angle"] = None
+        else:
+            camera, unknown = resolve_camera_angle(data.get("name", mv.name), _raw)
+            if unknown:
+                raise HTTPException(
+                    400,
+                    f"机位「{unknown}」不在权威词表内，暂不入库。"
+                    f"确认属于新机位后请扩充 app/core/vocab.py 的 CAMERA_ANGLES，"
+                    f"或先把机位选为「其他」。",
+                )
+            data["camera_angle"] = camera
+    if "session_label" in data and (data.get("session_label") or "").strip():
+        label, err = resolve_session_label(data.get("session_label"))
+        if err:
+            raise HTTPException(400, err)
+        data["session_label"] = label
+    else:
+        # 未提供或显式清空 → 按（新的）日期/活动名重算；
+        # 只在「原值仍是自动生成的那一个」时覆盖，手改过的保持不动
+        data.pop("session_label", None)
+        regenerated = maybe_regenerate_session(
+            old_label=mv.session_label,
+            old_performance_date=mv.performance_date,
+            old_published_date=mv.published_date,
+            old_event_name=mv.event_name,
+            old_uploader=mv.original_uploader,
+            new_performance_date=data.get("performance_date", mv.performance_date),
+            new_published_date=data.get("published_date", mv.published_date),
+            new_event_name=data.get("event_name", mv.event_name),
+            new_uploader=data.get("original_uploader", mv.original_uploader),
+        )
+        if regenerated is not None:
+            data["session_label"] = regenerated
+
     for k, v in data.items():
         setattr(mv, k, v)
     _apply_relations(mv, db, rel)
@@ -1041,6 +1271,12 @@ def update_video(mv_id: int, payload: MusicVideoUpdate, db: DbDep):
     mv = _get_active(db, mv_id)
     _fill_relations(mv)
     _fill_participants(mv)
+    audit_changes = dict(data)
+    if rel:
+        rel_changed = {k: v for k, v in rel.items() if v is not None}
+        if rel_changed:
+            audit_changes["relations"] = rel_changed
+    mark_changes(request, before, audit_changes)
     return _to_read(mv)
 
 @router.get("/{mv_id}/path-suggestion", response_model=VideoPathSuggestion)

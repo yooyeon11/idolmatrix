@@ -18,6 +18,14 @@ export const membershipsApi = {
       .get<MembershipWithArtist[]>('/memberships/by_group/' + groupId, { params: { status } })
       .then((r) => r.data)
   },
+  /** 批量：一次取多位艺人的在团关系（首页立绘墙用，避免 20 个请求） */
+  byArtists(artistIds: number[], status?: string) {
+    return http
+      .get<MembershipWithGroup[]>('/memberships/by_artists', {
+        params: { ids: artistIds.join(','), status },
+      })
+      .then((r) => r.data)
+  },
   byArtist(artistId: number, status?: string) {
     return http
       .get<MembershipWithGroup[]>('/memberships/by_artist/' + artistId, { params: { status } })

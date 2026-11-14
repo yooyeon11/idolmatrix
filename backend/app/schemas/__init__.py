@@ -26,7 +26,6 @@ from app.schemas.album import (
     CoverSearchItem,
     CoverSearchRequest,
 )
-from app.schemas.ai import AiSuggestRequest, AiSuggestResult
 from app.schemas.artist import (
     ArtistBrief,
     ArtistCreate,
@@ -121,6 +120,12 @@ from app.schemas.music_video import (
     MusicVideoTrackInput,
     MusicVideoTrackRead,
     MusicVideoUpdate,
+    StageMatrixDay,
+    StageMatrixGroup,
+    StageMatrixItem,
+    StageMatrixMember,
+    StageMatrixRead,
+    StageMatrixSong,
     CoverFrameApplyRequest,
     CoverFrameItem,
     CoverFramesRequest,
@@ -134,6 +139,8 @@ from app.schemas.music_video import (
     ReorganizeResult,
     ResolutionFacet,
     ResolutionFacetResponse,
+    ValueFacet,
+    ValueFacetResponse,
     DuplicateCopyInfo,
     ScannedFileItem,
     DeleteScannedRequest,
@@ -164,6 +171,11 @@ from app.schemas.song import (
     SongFuzzyHit,
     SongRead,
     SongUpdate,
+)
+from app.schemas.video_publish import (
+    VideoPublishRead,
+    VideoPublishStatusUpdate,
+    VideoPublishUpsert,
 )
 
 __all__ = [
@@ -238,6 +250,7 @@ __all__ = [
     # MusicVideo
     "MusicVideoCreate",
     "MusicVideoRead",
+    "StageMatrixRead",
     "MusicVideoUpdate",
     "MusicVideoBrief",
     "MusicVideoTrackInput",
@@ -265,6 +278,8 @@ __all__ = [
     "ReorganizeResult",
     "ResolutionFacet",
     "ResolutionFacetResponse",
+    "ValueFacet",
+    "ValueFacetResponse",
     "BuildTitleRequest",
     "BuildTitleResult",
     "VideoPathSuggestion",
@@ -272,6 +287,10 @@ __all__ = [
     "VideoRelocateResult",
     "MissingVideoItem",
     "LibraryCleanupResult",
+    # VideoPublish（B 站分发）
+    "VideoPublishRead",
+    "VideoPublishUpsert",
+    "VideoPublishStatusUpdate",
     # Photos
     "PhotoSourceCreate",
     "PhotoSourceRead",
@@ -284,9 +303,6 @@ __all__ = [
     "PhotoCollectionRead",
     "PhotoCollectRequest",
     "PhotoMembershipsResponse",
-    # AI
-    "AiSuggestRequest",
-    "AiSuggestResult",
     # 站点获取（Provider）
     "ProviderSearchItem",
     "ProviderDetail",

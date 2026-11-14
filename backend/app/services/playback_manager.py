@@ -40,6 +40,7 @@ from app.models.playback import (
     PS_PLAYING,
     PS_STARTING,
     PS_STOPPED,
+    PLAY_MODE_BILIBILI,
     PLAY_MODE_DIRECT_PLAY,
     PLAY_MODE_DIRECT_STREAM,
     PLAY_MODE_TRANSCODE,
@@ -71,6 +72,9 @@ _SEGMENT_LINE = re.compile(r"segment_(\d{5})\.(ts|m4s)")
 # 播放会话 URL 前缀（路由注册处保持一致）
 SESSION_URL_PREFIX = "/api/playback/sessions"
 
+# 签名播放 URL：原生播放器带不了 Cookie，URL 里带 ?exp=&sig=
+from app.core import playback_sign  # noqa: E402
+
 
 def rewrite_hls_uris(
     raw: str,
@@ -97,6 +101,8 @@ def rewrite_hls_uris(
     磁盘上 FFmpeg 自己的 playlist.m3u8 永不被修改。
     """
     base = f"{SESSION_URL_PREFIX}/{session_id}/segments"
+    # 播放器按清单里的 URL 逐片请求，URL 必须自带签名，否则分片会被门禁挡掉
+    q = playback_sign.query(session_id)
     lines = []
     real_duration = 0.0
     for line in raw.splitlines():
@@ -113,7 +119,7 @@ def rewrite_hls_uris(
         if stripped.startswith("#EXT-X-MAP:"):
             rewritten = re.sub(
                 r'URI="([^"]+)"',
-                lambda m: f'URI="{base}/{m.group(1)}"',
+                lambda m: f'URI="{base}/{m.group(1)}{q}"',
                 stripped,
             )
             lines.append(rewritten)
@@ -126,7 +132,7 @@ def rewrite_hls_uris(
             lines.append(line)
             continue
         if not stripped.startswith("#") and _SEGMENT_NAME.match(stripped):
-            lines.append(f"{base}/{stripped}")
+            lines.append(f"{base}/{stripped}{q}")
             continue
         lines.append(line)
 
@@ -149,7 +155,7 @@ def rewrite_hls_uris(
         while pad_duration > 1e-6:
             seg_len = min(segment_duration, pad_duration)
             added.append(f"#EXTINF:{seg_len:.6f},")
-            added.append(f"{base}/segment_{idx:05d}.{ext}")
+            added.append(f"{base}/segment_{idx:05d}.{ext}{q}")
             pad_duration -= seg_len
             idx += 1
         if added:
@@ -574,11 +580,20 @@ class PlaybackManager:
             ),
         }
         # 播放 URL：播放器只需 stream_url / manifest_url 二选一
-        if session.play_mode == PLAY_MODE_DIRECT_PLAY:
-            d["stream_url"] = f"{SESSION_URL_PREFIX}/{session.id}/stream"
+        # 媒体 URL 一律带短时效签名，原生播放器（VLC / ExoPlayer / AVPlayer）
+        # 无需 Cookie 即可直接打开；浏览器带 Cookie 访问同样有效。
+        _q = playback_sign.query(session.id)
+        if session.play_mode == PLAY_MODE_BILIBILI:
+            # 外部平台承载：本地既不给流也不给清单，前端按 embed_url 渲染 iframe。
+            # 这里必须显式置空——否则会落到 else 分支拼出一个指向本地的
+            # manifest.m3u8，播放器拿到 404 而不是走嵌入分支。
+            d["stream_url"] = None
+            d["manifest_url"] = None
+        elif session.play_mode == PLAY_MODE_DIRECT_PLAY:
+            d["stream_url"] = f"{SESSION_URL_PREFIX}/{session.id}/stream{_q}"
             d["manifest_url"] = None
         else:
-            d["manifest_url"] = f"{SESSION_URL_PREFIX}/{session.id}/manifest.m3u8"
+            d["manifest_url"] = f"{SESSION_URL_PREFIX}/{session.id}/manifest.m3u8{_q}"
             d["stream_url"] = None
         d["subtitle_urls"] = []
         d["audio_streams"] = []
@@ -785,7 +800,7 @@ class PlaybackManager:
             "#EXTM3U\n"
             "#EXT-X-VERSION:6\n"
             f"#EXT-X-STREAM-INF:BANDWIDTH={bandwidth}{resolution},CODECS=\"{codecs}\"\n"
-            f"{SESSION_URL_PREFIX}/{session.id}/index.m3u8\n"
+            f"{SESSION_URL_PREFIX}/{session.id}/index.m3u8{playback_sign.query(session.id)}\n"
         )
 
     def media_manifest_content(self, db, session: PlaybackSession) -> Tuple[str, str]:

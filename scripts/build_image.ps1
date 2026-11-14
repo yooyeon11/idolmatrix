@@ -1,4 +1,4 @@
-# =============================================================
+﻿# =============================================================
 # idolMatrix 镜像构建 + 冒烟验证 + 导出（版本号参数化）
 #
 # 用法（仓库根目录，需 docker 引擎已就绪）：
@@ -12,10 +12,20 @@
 # =============================================================
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Version
+    [string]$Version,
+    # 默认用主 Dockerfile（容器内跑 npm ci + vite build）。
+    # 构建机无法访问 npm 源时，先在宿主 `vite build` 产出 build_dist，改用 Dockerfile.prebuilt 打包：
+    #   -DockerfilePath Dockerfile.prebuilt
+    [string]$DockerfilePath = "Dockerfile",
+    # 额外 build-arg（形如 BASE_REGISTRY=docker.m.daocloud.io/library/）。
+    # Docker Hub 直连被墙时用它指向国内镜像源，见 Dockerfile.prebuilt 头注释。
+    [string[]]$BuildArg = @()
 )
 
-$ErrorActionPreference = "Stop"
+# PS 5.1 陷阱：原生命令（docker）把进度写到 stderr，`$ErrorActionPreference="Stop"`
+# 会在 docker build 的第一行进度处当作终止错误直接中断，根本走不到下面的 $LASTEXITCODE 判断。
+# 这里统一用 Continue，失败一律靠显式 $LASTEXITCODE / -ErrorAction Stop 判定。
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 
 # ---- 0. 引擎就绪检查 ----
@@ -26,8 +36,10 @@ if ($LASTEXITCODE -ne 0) {
 Write-Output "== docker 引擎 OK =="
 
 # ---- 1. 构建 ----
-Write-Output "== docker build --platform linux/amd64 -t idolmatrix:$Version =="
-docker build --platform linux/amd64 -t "idolmatrix:$Version" $root
+Write-Output "== docker build --platform linux/amd64 -f $DockerfilePath -t idolmatrix:$Version =="
+$argList = @()
+foreach ($a in $BuildArg) { $argList += @("--build-arg", $a) }
+docker build --platform linux/amd64 -f (Join-Path $root $DockerfilePath) @argList -t "idolmatrix:$Version" $root
 if ($LASTEXITCODE -ne 0) { throw "docker build 失败" }
 
 # ---- 2. 冒烟：临时容器 + health 版本比对 ----
@@ -41,7 +53,7 @@ try {
     foreach ($i in 1..30) {
         Start-Sleep -Seconds 2
         try {
-            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:18010/api/system/health" -UseBasicParsing -TimeoutSec 3
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:18010/api/system/health" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
             $healthJson = $resp.Content
             if ($resp.Content -match "`"version`":`"$Version`"") { $healthOk = $true; break }
         } catch { Start-Sleep -Seconds 1 }

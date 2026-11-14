@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -341,12 +341,22 @@ def sync_uploader(db: Session, uploader_name: str, channel_ref: str) -> Dict[str
     items = result["items"]
     now = datetime.utcnow()
     key = app_settings.uploader_key(uploader_name)
+    channel_id = str(result.get("channel_id") or "").strip()
     # 历史键一并纳入，随后原地改写成新键并去重（迁移期两套键并存）
     keys = set(_snapshot_keys(db, key)) | {key}
+    if channel_id:
+        # 同一频道改名后的其它规则名：它们的旧快照也归到当前键
+        for rule in app_settings.read_uploader_rules(db):
+            if (rule.get("youtube_channel_id") or "") == channel_id:
+                keys.add(app_settings.uploader_key(rule["name"]))
 
     existing: dict[str, ExternalChannelVideo] = {}
+    conditions = [ExternalChannelVideo.uploader_key.in_(keys)]
+    if channel_id:
+        # 同一频道改名后，旧名下的快照也要纳入并归到当前名
+        conditions.append(ExternalChannelVideo.channel_id == channel_id)
     for row in db.scalars(
-        select(ExternalChannelVideo).where(ExternalChannelVideo.uploader_key.in_(keys))
+        select(ExternalChannelVideo).where(or_(*conditions))
     ).all():
         prev = existing.get(row.video_id)
         if prev is None:
@@ -377,6 +387,8 @@ def sync_uploader(db: Session, uploader_name: str, channel_ref: str) -> Dict[str
         row.published_at = it.get("published_at")
         row.is_short = bool(duration is not None and duration < SHORT_DURATION_SECONDS)
         row.last_seen_at = now
+        if channel_id:
+            row.channel_id = channel_id
         # 封面：本地缓存缺失才下载（增量，不重复拉）
         if not row.thumbnail_path or not (settings.youtube_cover_dir / row.thumbnail_path).exists():
             row.thumbnail_path = _download_cover(vid, it.get("thumb_url") or "")
@@ -393,39 +405,77 @@ def sync_uploader(db: Session, uploader_name: str, channel_ref: str) -> Dict[str
         )
 
     db.commit()
+    # 回填规则的 channel_id（不触碰 missing_check_enabled，绝不自动勾选缺失检测）
+    if channel_id:
+        app_settings.set_uploader_channel_id(db, uploader_name, channel_id)
     logger.info(
-        "[youtube] 博主「%s」快照刷新：%d 条（移除 %d）",
+        "[youtube] 博主「%s」快照刷新：%d 条（移除 %d，channel_id=%s）",
         uploader_name,
         len(items),
         len(stale),
+        channel_id or "-",
     )
     return {
         "channel_title": result["channel_title"],
+        "channel_id": channel_id,
         "channel_total": len(items),
         "removed": len(stale),
     }
 
 
-def missing_report(db: Session, uploader_name: str) -> Dict[str, Any]:
-    """缺失比对报告：频道全集快照 − 库内该博主 YouTube 视频（按 source_id 比对）。"""
-    key = app_settings.uploader_key(uploader_name)
+def missing_report(
+    db: Session, uploader_name: str, channel_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """缺失比对报告：频道全集快照 − 库内该频道 YouTube 视频（按 source_id 比对）。
 
-    keys = _snapshot_keys(db, key)
+    channel_id 存在时以频道为身份：同一频道改名后的旧名/新名视频都算「库内已有」，
+    不会因为改名把已入库的视频误报成缺失。没有 channel_id 的老数据退回按名字键比对。
+    """
+    key = app_settings.uploader_key(uploader_name)
+    cid = (channel_id or "").strip()
+    rules = app_settings.read_uploader_rules(db)
+    if not cid:
+        for rule in rules:
+            if app_settings.uploader_key(rule["name"]) == key and rule.get("youtube_channel_id"):
+                cid = rule["youtube_channel_id"]
+                break
+
+    # 归一化名字键：当前名字 + 同一 channel_id 下的其它规则名
+    name_keys = {key}
+    if cid:
+        name_keys |= {
+            app_settings.uploader_key(r["name"])
+            for r in rules
+            if r.get("youtube_channel_id") == cid
+        }
+
+    # 快照：按名字键 + channel_id 双口径取，覆盖改名前后两套 uploader_key
+    keys: set[str] = set()
+    for k in name_keys:
+        keys.update(_snapshot_keys(db, k))
+    conditions = [ExternalChannelVideo.uploader_key.in_(keys)] if keys else []
+    if cid:
+        conditions.append(ExternalChannelVideo.channel_id == cid)
     rows = (
-        db.scalars(
-            select(ExternalChannelVideo).where(
-                ExternalChannelVideo.uploader_key.in_(keys)
-            )
-        ).all()
-        if keys
+        db.scalars(select(ExternalChannelVideo).where(or_(*conditions))).all()
+        if conditions
         else []
     )
     # 迁移期旧键可能仍有残留：按 video_id 去重，避免缺失清单出现重复行
     rows = list({row.video_id: row for row in rows}.values())
 
-    # 库内该博主的 YouTube 视频 ID 集合：先取库内博主名，用统一归一化键筛出
-    # 「肉眼同名但写法不同」的候选名，再精确取 source_id。SQLite 的 lower() 只认 ASCII，
-    # 同名不同写法（空格 / 全角 / 零宽字符）在 SQL 里是两个博主，会造成缺失误报。
+    # 库内视频 ID：channel_id 优先（覆盖改名前后所有名字），名字键兜底老数据
+    lib_ids: set[str] = set()
+    if cid:
+        lib_ids |= set(
+            db.scalars(
+                select(MusicVideo.source_id)
+                .where(MusicVideo.deleted_at.is_(None))
+                .where(func.lower(MusicVideo.source_platform) == "youtube")
+                .where(MusicVideo.source_channel_id == cid)
+                .where(MusicVideo.source_id.is_not(None))
+            ).all()
+        )
     lib_names = [
         name
         for name in db.scalars(
@@ -435,11 +485,10 @@ def missing_report(db: Session, uploader_name: str) -> Dict[str, Any]:
             .where(MusicVideo.original_uploader.is_not(None))
             .distinct()
         ).all()
-        if app_settings.uploader_key(name) == key
+        if app_settings.uploader_key(name) in name_keys
     ]
-    lib_ids: set[str] = set()
     if lib_names:
-        lib_ids = set(
+        lib_ids |= set(
             db.scalars(
                 select(MusicVideo.source_id)
                 .where(MusicVideo.deleted_at.is_(None))
@@ -473,6 +522,7 @@ def missing_report(db: Session, uploader_name: str) -> Dict[str, Any]:
 
     return {
         "uploader": uploader_name,
+        "channel_id": cid,
         "channel_video_total": len(rows),
         "library_count": len(lib_ids),
         "missing_count": len(items),

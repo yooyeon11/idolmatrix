@@ -44,6 +44,25 @@ def fix_short_flags() -> int:
     return 0
 
 
+def backfill_channel_ids() -> int:
+    """从 .info.json 侧车回填 music_videos.source_channel_id（频道改名归组用）。"""
+    from app.core.database import SessionLocal
+    from app.services.uploader_channel_service import backfill_video_channel_ids
+
+    db = SessionLocal()
+    try:
+        stats = backfill_video_channel_ids(db)
+    finally:
+        db.close()
+    print(
+        "channel_id 回填完成："
+        f"扫描 {stats['scanned']} 条，更新 {stats['updated']} 条；"
+        f"无文件 {stats['no_file']}，无侧车 {stats['no_sidecar']}，"
+        f"侧车无 channel_id {stats['no_channel_id']}，异常 {stats['errors']}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="app.cli", description="idolMatrix 维护命令")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -56,11 +75,17 @@ def main(argv: list[str] | None = None) -> int:
         "fix-short-flags",
         help="按视频类型重算 is_short（清掉历史上因「时长 < 70 秒」误标为短视频的记录）",
     )
+    sub.add_parser(
+        "backfill-channel-ids",
+        help="从 .info.json 侧车回填 YouTube channel_id（频道改名后按频道归组）",
+    )
 
     args = parser.parse_args(argv)
 
     if args.cmd == "fix-short-flags":
         return fix_short_flags()
+    if args.cmd == "backfill-channel-ids":
+        return backfill_channel_ids()
 
     from app.services.auth_service import (
         AuthError,

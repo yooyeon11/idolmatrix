@@ -2,10 +2,10 @@
 # K-pop 媒体库 —— 绿联 NAS (UGOS Pro) Docker Compose 部署
 #
 # 使用方法（NAS 上不构建镜像，直接导入 tar 后 compose 启动）：
-#   1. 在开发机执行：docker build --platform linux/amd64 -t idolmatrix:3.9.6 .
-#                      docker save idolmatrix:3.9.6 -o idolmatrix-3.9.6.tar
-#   2. 将 idolmatrix-3.9.6.tar 与 docker-compose.yml、.env.nas.example 上传到 NAS
-#   3. 在 NAS 上导入镜像：docker load -i idolmatrix-3.9.6.tar
+#   1. 在开发机执行：docker build --platform linux/amd64 -t idolmatrix:4.0.0 .
+#                      docker save idolmatrix:4.0.0 -o idolmatrix-4.0.0.tar
+#   2. 将 idolmatrix-4.0.0.tar 与 docker-compose.yml、.env.nas.example 上传到 NAS
+#   3. 在 NAS 上导入镜像：docker load -i idolmatrix-4.0.0.tar
 #   4. 可选：复制 .env.nas.example 为 .env 自定义路径（不复制则用默认 /volume1/kpop/*）
 #   5. 在项目目录执行：docker compose up -d
 #   6. 浏览器打开：http://<NAS-IP>:8010
@@ -28,7 +28,7 @@
 services:
   kpop-media:
     # ★ NAS 上只认 image，禁止 build:（见文件头注释）
-    image: idolmatrix:3.9.8
+    image: idolmatrix:4.0.0
     container_name: kpop-media
     restart: unless-stopped
     ports:
@@ -46,6 +46,10 @@ services:
       FFPROBE_PATH: /usr/local/bin/ffprobe
       # ==== 时区 ====
       TZ: "${TZ:-Asia/Shanghai}"
+      # ★ 文件名编码：容器默认无 locale，中文/韩文文件名会解码成 surrogate 乱码
+      PYTHONUTF8: "1"
+      LANG: "C.UTF-8"
+      LC_ALL: "C.UTF-8"
       # ==== 登录门禁（v3.2.0+）====
       # AUTH_REQUIRED: auto=必须登录（零用户时走 /setup）；false=紧急关闭门禁，
       #   局域网可直接 /setup；公网初始化必须设 BOOTSTRAP_TOKEN，建号后立刻删掉

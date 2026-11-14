@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -55,6 +56,8 @@ from app.services.video_meta import (
     COVER_VIDEO_TYPE,
     MIX_VIDEO_TYPE,
     is_short_video,
+    resolve_camera_angle,
+    resolve_session_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,7 +82,7 @@ _SIDECAR_SUFFIXES = (".info.json", ".webp", ".jpg", ".jpeg", ".png", ".avif")
 # info.json 精简白名单：不包含评论/字幕/自动字幕等与库无关的内容
 INFO_KEYS = (
     "title", "fulltitle", "webpage_url", "id", "extractor",
-    "uploader", "uploader_id", "channel",
+    "uploader", "uploader_id", "channel", "channel_id", "channel_url",
     "upload_date", "timestamp", "description",
     "duration", "width", "height", "resolution", "fps",
     "vcodec", "acodec", "filesize_approx", "format_id", "format",
@@ -290,6 +293,23 @@ def extract_source_identity(info: dict) -> tuple[Optional[str], Optional[str]]:
     else:
         return None, None
     return platform, sid.strip()
+
+
+def extract_channel_id(info: dict) -> Optional[str]:
+    """从侧车元数据提取 YouTube channel_id（UC…）。
+
+    yt-dlp 的 `.info.json` 同时有 `channel_id` 与 `channel_url`；旧版本或手工侧车
+    可能只有 URL，这里一并兜底解析 `/channel/UC…`。B 站/其他平台返回 None。
+    """
+    value = info.get("channel_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    url = info.get("channel_url") or ""
+    if isinstance(url, str):
+        m = re.search(r"/channel/(UC[0-9A-Za-z_-]{10,})", url)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _scan_one(path: Path, db: Session) -> ScannedFileItem:
@@ -1002,18 +1022,22 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
     source_platform = mv_data.source_platform
     source_id = mv_data.source_id
     source_url = mv_data.source_url
-    if not (source_platform and source_id):
+    source_channel_id = mv_data.source_channel_id
+    # 平台视频身份 / 频道身份：缺任何一项都要读侧车补齐
+    if not (source_platform and source_id) or not source_channel_id:
         try:
             info = read_incoming_info(source)
         except Exception:  # noqa: BLE001
             info = {}
-        else:
+        if not (source_platform and source_id):
             platform, sid = extract_source_identity(info)
             if platform and sid:
                 source_platform = source_platform or platform
                 source_id = source_id or sid
                 if not source_url and isinstance(info.get("webpage_url"), str):
                     source_url = info["webpage_url"]
+        if not source_channel_id:
+            source_channel_id = extract_channel_id(info)
 
     # 1.6 去重预检（仅对活跃记录；软删除记录允许重建，不阻断入库）
     #    提前校验避免文件移动后才因唯一索引失败，留下孤儿文件。
@@ -1055,6 +1079,44 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
         # （否则 70 秒以内的 MIX 混剪 / 预告会被塞进短视频列表）
         is_short = is_short_video(video_types, video_type)
 
+    # 2.1 机位：**只对官方舞台（PerformanceVideo）填**（业主 2026-10-23 收敛口径）。
+    #     其他类型（Fancam / SpecialStage / CoverStage / CollabStage / OfficialMV /
+    #     ShortVideo …）一律留空 —— 这些类型的「机位」要么由类型本身决定，要么没有意义。
+    #     官方舞台内部：显式值只认权威词表；未填则从 name 尾标按词表匹配。
+    #     词表外写法（如 `OnePick Cam` / `SideCam`）一律**阻断入库**。
+    if video_type == "PerformanceVideo":
+        camera_angle, unknown_camera = resolve_camera_angle(
+            mv_data.name, mv_data.camera_angle
+        )
+    else:
+        camera_angle, unknown_camera = None, None
+    if unknown_camera:
+        raise ValueError(
+            f"机位「{unknown_camera}」不在权威词表内，暂不入库。"
+            f"确认属于新机位后请扩充 app/core/vocab.py 的 CAMERA_ANGLES，"
+            f"或先把机位选为「其他」再入库。"
+        )
+
+    # 2.2 场次：显式值只校验格式；未填则自动生成 `YYMMDD - 活动名`
+    #     （日期缺失回退上传日期，活动名缺失回退频道名）。
+    uploader_for_session = (mv_data.original_uploader or "").strip()
+    if not uploader_for_session:
+        try:
+            _info = read_incoming_info(source)
+        except Exception:  # noqa: BLE001
+            _info = {}
+        if isinstance(_info, dict):
+            uploader_for_session = str(_info.get("uploader") or "").strip()
+    session_label, session_err = resolve_session_label(
+        mv_data.session_label,
+        mv_data.performance_date,
+        mv_data.published_date,
+        mv_data.event_name,
+        uploader_for_session,
+    )
+    if session_err:
+        raise ValueError(session_err)
+
     mv = MusicVideo(
         name=mv_data.name,
         original_title=mv_data.original_title,
@@ -1068,12 +1130,15 @@ def ingest_video(db: Session, request: IngestRequest) -> IngestResult:
         participants=mv_data.participants,
         event_name=mv_data.event_name,
         performance_date=mv_data.performance_date,
+        camera_angle=camera_angle,
+        session_label=session_label,
         release_date=mv_data.release_date,
         published_date=mv_data.published_date,
         source_platform=source_platform,
         source_id=source_id,
         source_url=source_url,
         original_uploader=mv_data.original_uploader,
+        source_channel_id=source_channel_id,
         duration=mv_data.duration,
         width=mv_data.width,
         height=mv_data.height,
