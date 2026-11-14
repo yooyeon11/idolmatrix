@@ -145,3 +145,6 @@ idolmatrix-记忆导出-*.md
 # 抓取缓存 / 临时脚本（下划线前缀为一次性草稿）
 /scripts/_*
 /scripts/*cache*.json
+
+# 介绍视频本体：7MB+ 二进制不入库，走 Release 附件
+/docs/bilibili/*.mp4
